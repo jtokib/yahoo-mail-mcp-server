@@ -1,0 +1,26 @@
+# Environment files with credentials
+.env
+.env.local
+.env.production
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Claude Desktop config (contains credentials)
+claude_desktop_config.json
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Personal notes and debug files
+CLAUDE.md
+debug.log
+*.tmp
