@@ -7,9 +7,12 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import Imap from 'imap';
 import { simpleParser } from 'mailparser';
+import express from 'express';
+import cors from 'cors';
 
 class YahooMailMCPServer {
     constructor() {
@@ -438,9 +441,82 @@ class YahooMailMCPServer {
     }
 
     async run() {
+        // Check if we should use SSE (HTTP) or stdio transport
+        const transportMode = process.env.TRANSPORT_MODE || 'stdio';
+
+        if (transportMode === 'sse') {
+            await this.runSSE();
+        } else {
+            await this.runStdio();
+        }
+    }
+
+    async runStdio() {
         const transport = new StdioServerTransport();
         await this.server.connect(transport);
         console.error('Yahoo Mail MCP server running on stdio');
+    }
+
+    async runSSE() {
+        const app = express();
+        const port = process.env.PORT || 3000;
+
+        // Enable CORS for Claude.ai
+        app.use(cors({
+            origin: true,
+            credentials: true
+        }));
+
+        app.use(express.json());
+
+        // Health check endpoint
+        app.get('/health', (req, res) => {
+            res.json({
+                status: 'ok',
+                service: 'yahoo-mail-mcp',
+                version: '1.0.0',
+                timestamp: new Date().toISOString()
+            });
+        });
+
+        // SSE endpoint for MCP
+        app.get('/mcp/sse', async (req, res) => {
+            console.error('New SSE connection established');
+            const transport = new SSEServerTransport('/mcp/message', res);
+            await this.server.connect(transport);
+        });
+
+        // Message endpoint for SSE
+        app.post('/mcp/message', async (req, res) => {
+            console.error('Received message on /mcp/message');
+            // The SSEServerTransport handles this internally
+            res.status(200).end();
+        });
+
+        // Root endpoint
+        app.get('/', (req, res) => {
+            res.json({
+                name: 'Yahoo Mail MCP Server',
+                version: '1.0.0',
+                description: 'MCP server for Yahoo Mail access via IMAP',
+                endpoints: {
+                    health: '/health',
+                    sse: '/mcp/sse',
+                    message: '/mcp/message'
+                },
+                tools: [
+                    'list_emails',
+                    'read_email',
+                    'search_emails'
+                ]
+            });
+        });
+
+        app.listen(port, () => {
+            console.error(`Yahoo Mail MCP server running on port ${port}`);
+            console.error(`SSE endpoint: http://localhost:${port}/mcp/sse`);
+            console.error(`Health check: http://localhost:${port}/health`);
+        });
     }
 }
 

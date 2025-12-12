@@ -1,0 +1,38 @@
+# Cross-platform line ending configuration
+# This ensures consistent line endings across Windows and Linux
+
+# Auto detect text files and normalize line endings to LF in repository
+* text=auto eol=lf
+
+# Explicitly declare text files
+*.js text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.sh text eol=lf
+
+# Dockerfile
+Dockerfile text eol=lf
+.dockerignore text eol=lf
+
+# Git files
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# Declare files that should always have CRLF line endings on checkout (Windows-specific)
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Denote binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.tar binary

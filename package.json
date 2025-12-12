@@ -1,15 +1,44 @@
 {
   "name": "yahoo-mail-mcp",
   "version": "1.0.0",
+  "description": "Yahoo Mail MCP Server - Read-only access to Yahoo Mail via IMAP",
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "start:stdio": "cross-env TRANSPORT_MODE=stdio node server.js",
+    "start:sse": "cross-env TRANSPORT_MODE=sse PORT=3000 node server.js",
+    "dev": "cross-env TRANSPORT_MODE=sse PORT=3000 nodemon server.js",
+    "docker:build": "docker build -t yahoo-mail-mcp .",
+    "docker:run": "docker run -p 3000:3000 --env-file .env yahoo-mail-mcp",
+    "docker:compose:up": "docker-compose up --build",
+    "docker:compose:down": "docker-compose down",
+    "docker:compose:logs": "docker-compose logs -f",
+    "test:health": "node -e \"require('http').get('http://localhost:3000/health', r => { let d=''; r.on('data', c => d+=c); r.on('end', () => console.log(d)); })\"",
+    "test:sse": "node -e \"require('http').get('http://localhost:3000/mcp/sse', r => console.log('SSE Status:', r.statusCode))\""
   },
+  "keywords": [
+    "mcp",
+    "yahoo-mail",
+    "imap",
+    "email",
+    "model-context-protocol"
+  ],
+  "author": "",
+  "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "cors": "^2.8.5",
     "dotenv": "^17.2.1",
-    "imap": "^0.8.19",
+    "express": "^4.18.2",
+    "imap": "^0.8.17",
     "mailparser": "^3.7.1"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }

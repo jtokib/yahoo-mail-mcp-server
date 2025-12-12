@@ -1,159 +1,758 @@
 # Yahoo Mail MCP Server
 
-A Model Context Protocol (MCP) server that provides read-only access to Yahoo Mail through IMAP. This allows Claude Desktop to list, read, and search your Yahoo Mail emails.
+A Model Context Protocol (MCP) server that provides read-only access to Yahoo Mail via IMAP. This server supports both local stdio transport (for Claude Desktop) and HTTP/SSE transport (for remote access via Claude.ai).
 
 ## Features
 
-- **List recent emails** - Get a list of recent emails from your inbox
-- **Read email content** - Read the full content of specific emails
-- **Search emails** - Search emails by subject line or sender
+- **Read-Only Access**: Safely browse your Yahoo Mail without modification capabilities
+- **Three Core Tools**:
+  - `list_emails`: List recent emails from your inbox
+  - `read_email`: Read the full content of a specific email
+  - `search_emails`: Search emails by subject or sender
+- **Dual Transport Modes**:
+  - `stdio`: For local Claude Desktop integration
+  - `sse`: For remote access via HTTP/Server-Sent Events (required for Render.com)
+- **Cross-Platform**: Works on both Windows and Linux development environments
+- **Docker Support**: Containerized deployment with Docker and Docker Compose
+- **Cloud Ready**: Configured for easy deployment to Render.com
 
 ## Prerequisites
 
-- Node.js (v16 or higher)
-- Yahoo Mail account with IMAP enabled
-- Claude Desktop
+### For Local Development
 
-## Setup Instructions
+- **Node.js**: Version 18.0.0 or higher
+- **Yahoo Mail Account**: With app-specific password enabled
+- **Git**: For version control
 
-### 1. Clone and Install
+### For Docker Development/Deployment
 
-```bash
-git clone https://github.com/yourusername/yahoo-mail-mcp.git
-cd yahoo-mail-mcp
-npm install
-```
+- **Docker**: Latest version
+- **Docker Compose**: Latest version (included with Docker Desktop on Windows/Mac)
 
-### 2. Configure Yahoo Mail
+### For Render.com Deployment
 
-#### Enable IMAP Access
-1. Log into your Yahoo Mail account
-2. Go to **Settings** → **More Settings** → **Mailboxes** 
-3. Enable **IMAP access**
+- **GitHub Account**: To host your repository
+- **Render.com Account**: Free tier available at https://render.com
 
-#### Generate App Password
-1. Go to [Yahoo Account Security](https://login.yahoo.com/account/security/app-passwords)
-2. Click **Generate app password**
-3. Select **Other app** and name it (e.g., "Claude MCP")
-4. Copy the 16-character password (no spaces)
+## Quick Start
 
-### 3. Environment Configuration
-
-Create a `.env` file (copy from `.env.example`):
+### 1. Clone and Setup
 
 ```bash
+# Clone the repository
+git clone <your-repo-url>
+cd yahoo-mail-mcp-server
+
+# Copy environment template
 cp .env.example .env
 ```
 
-Edit `.env` with your credentials:
+### 2. Get Yahoo Mail App Password
+
+1. Go to https://login.yahoo.com/account/security
+2. Click "Generate app password" or "Manage app passwords"
+3. Select "Other App" and enter "MCP Server"
+4. Copy the generated 16-character password
+
+### 3. Configure Environment
+
+Edit `.env` file with your credentials:
 
 ```env
 YAHOO_EMAIL=your.email@yahoo.com
 YAHOO_APP_PASSWORD=your16charpassword
+TRANSPORT_MODE=stdio  # or 'sse' for HTTP mode
+PORT=3000
 ```
 
-### 4. Configure Claude Desktop
+### 4. Install Dependencies
 
-Add this server to your Claude Desktop configuration:
-
-**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`  
-**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "yahoo-mail": {
-      "command": "node",
-      "args": ["/path/to/yahoo-mail-mcp/server.js"],
-      "env": {
-        "YAHOO_EMAIL": "your.email@yahoo.com",
-        "YAHOO_APP_PASSWORD": "your16charpassword"
-      }
-    }
-  }
-}
+**Windows (PowerShell):**
+```powershell
+npm install
 ```
 
-> **Note:** Replace `/path/to/yahoo-mail-mcp/server.js` with the actual path to your server.js file
-
-### 5. Restart Claude Desktop
-
-Completely close and reopen Claude Desktop to load the MCP server.
-
-## Usage
-
-Once configured, you can use these tools in Claude Desktop:
-
-### List Recent Emails
-```
-List my recent emails
+**Linux/macOS (Bash):**
+```bash
+npm install
 ```
 
-### Read Specific Email
-```
-Read email #5
+### 5. Run Locally
+
+**stdio mode (for Claude Desktop):**
+```bash
+npm run start:stdio
 ```
 
-### Search Emails
-```
-Search for emails from "github"
+**SSE mode (for testing HTTP endpoint):**
+```bash
+npm run start:sse
 ```
 
-## Available Tools
+**Development mode (with auto-reload):**
+```bash
+npm run dev
+```
 
-- `list_emails` - List recent emails (default: 10, max: 50)
-- `read_email` - Read full content of an email by sequence number
-- `search_emails` - Search emails by subject or sender
+## Docker Usage
+
+### Build and Run with Docker
+
+**Windows (PowerShell):**
+```powershell
+# Build the image
+npm run docker:build
+
+# Run the container
+npm run docker:run
+
+# Or use Docker Compose (recommended)
+npm run docker:compose:up
+
+# View logs
+npm run docker:compose:logs
+
+# Stop containers
+npm run docker:compose:down
+```
+
+**Linux/macOS (Bash):**
+```bash
+# Build the image
+npm run docker:build
+
+# Run the container
+npm run docker:run
+
+# Or use Docker Compose (recommended)
+npm run docker:compose:up
+
+# View logs
+npm run docker:compose:logs
+
+# Stop containers
+npm run docker:compose:down
+```
+
+### Manual Docker Commands
+
+**Windows (PowerShell):**
+```powershell
+# Build
+docker build -t yahoo-mail-mcp .
+
+# Run
+docker run -p 3000:3000 `
+  -e YAHOO_EMAIL=your.email@yahoo.com `
+  -e YAHOO_APP_PASSWORD=yourpassword `
+  -e TRANSPORT_MODE=sse `
+  yahoo-mail-mcp
+
+# Or with Docker Compose
+docker-compose up -d
+```
+
+**Linux/macOS (Bash):**
+```bash
+# Build
+docker build -t yahoo-mail-mcp .
+
+# Run
+docker run -p 3000:3000 \
+  -e YAHOO_EMAIL=your.email@yahoo.com \
+  -e YAHOO_APP_PASSWORD=yourpassword \
+  -e TRANSPORT_MODE=sse \
+  yahoo-mail-mcp
+
+# Or with Docker Compose
+docker-compose up -d
+```
+
+## Testing the Server
+
+### Test Health Endpoint
+
+**Windows (PowerShell):**
+```powershell
+# Using npm script
+npm run test:health
+
+# Using curl (if installed)
+curl http://localhost:3000/health
+
+# Using PowerShell
+Invoke-WebRequest -Uri http://localhost:3000/health | Select-Object -Expand Content
+```
+
+**Linux/macOS (Bash):**
+```bash
+# Using npm script
+npm run test:health
+
+# Using curl
+curl http://localhost:3000/health
+```
+
+### Test SSE Endpoint
+
+**Windows (PowerShell):**
+```powershell
+# Using npm script
+npm run test:sse
+
+# Using curl
+curl http://localhost:3000/mcp/sse
+
+# Using PowerShell
+Invoke-WebRequest -Uri http://localhost:3000/mcp/sse
+```
+
+**Linux/macOS (Bash):**
+```bash
+# Using npm script
+npm run test:sse
+
+# Using curl
+curl http://localhost:3000/mcp/sse
+```
+
+## Deploying to Render.com
+
+### Step 1: Prepare Your Repository
+
+**Windows (PowerShell):**
+```powershell
+# Initialize git (if not already done)
+git init
+
+# Add all files
+git add .
+
+# Commit
+git commit -m "Initial commit: Yahoo Mail MCP Server"
+
+# Create GitHub repository at https://github.com/new
+# Then push to GitHub
+git remote add origin https://github.com/yourusername/yahoo-mail-mcp-server.git
+git branch -M main
+git push -u origin main
+```
+
+**Linux/macOS (Bash):**
+```bash
+# Initialize git (if not already done)
+git init
+
+# Add all files
+git add .
+
+# Commit
+git commit -m "Initial commit: Yahoo Mail MCP Server"
+
+# Create GitHub repository at https://github.com/new
+# Then push to GitHub
+git remote add origin https://github.com/yourusername/yahoo-mail-mcp-server.git
+git branch -M main
+git push -u origin main
+```
+
+### Step 2: Deploy to Render
+
+1. **Sign up/Login to Render.com**
+   - Go to https://render.com
+   - Click "Get Started for Free" or "Login"
+
+2. **Connect GitHub Repository**
+   - Click "New +" button in top right
+   - Select "Web Service"
+   - Click "Connect GitHub" and authorize Render
+   - Select your `yahoo-mail-mcp-server` repository
+
+3. **Configure the Service**
+   - **Name**: `yahoo-mail-mcp-server` (or your preferred name)
+   - **Runtime**: Docker
+   - **Region**: Choose closest to you (Oregon, Frankfurt, Singapore, Ohio)
+   - **Branch**: `main`
+   - **Plan**: Free (or Starter for production)
+
+4. **Set Environment Variables**
+
+   In the "Environment" section, click "Add Environment Variable" and add:
+
+   | Key | Value |
+   |-----|-------|
+   | `NODE_ENV` | `production` |
+   | `TRANSPORT_MODE` | `sse` |
+   | `YAHOO_EMAIL` | `your.email@yahoo.com` |
+   | `YAHOO_APP_PASSWORD` | `your16charpassword` |
+
+   **Important**:
+   - Mark `YAHOO_EMAIL` and `YAHOO_APP_PASSWORD` as "Secret"
+   - `PORT` is automatically set by Render, don't add it manually
+
+5. **Deploy**
+   - Click "Create Web Service"
+   - Render will automatically build and deploy your Docker container
+   - Wait for deployment to complete (first build takes 5-10 minutes)
+
+6. **Get Your Service URL**
+   - Once deployed, you'll get a URL like: `https://yahoo-mail-mcp-server.onrender.com`
+   - Test it by visiting: `https://yahoo-mail-mcp-server.onrender.com/health`
+
+### Step 3: Connect to Claude.ai
+
+1. **Open Claude.ai**
+   - Go to https://claude.ai
+   - Login to your account
+
+2. **Add MCP Connector**
+   - Click on your profile icon
+   - Select "Settings"
+   - Navigate to "Connectors" or "MCP Servers"
+   - Click "Add Connector" or "Add Server"
+
+3. **Configure the Connector**
+   - **Name**: Yahoo Mail
+   - **URL**: `https://your-service-name.onrender.com/mcp/sse`
+   - **Type**: Server-Sent Events (SSE)
+
+   Example:
+   ```
+   https://yahoo-mail-mcp-server.onrender.com/mcp/sse
+   ```
+
+4. **Test the Connection**
+   - Click "Test Connection" or "Save"
+   - If successful, you'll see a green checkmark
+   - You can now use Yahoo Mail tools in your Claude.ai conversations!
+
+### Step 4: Using the MCP Server in Claude.ai
+
+Once connected, you can use these tools in your conversations:
+
+```
+Can you list my recent emails?
+
+Can you read email number 5?
+
+Can you search for emails from john@example.com?
+```
 
 ## Troubleshooting
 
-### "No supported authentication method" Error
+### Common Issues
 
-This usually means:
-1. IMAP is not enabled in Yahoo Mail settings
-2. App password is incorrect or expired
-3. Your Yahoo account requires additional security setup
+#### 1. "Authentication failed" error
 
-### Server Not Appearing in Claude
+**Solution**: Verify your app-specific password
+- Make sure you're using an app-specific password, not your regular Yahoo password
+- Generate a new app-specific password at https://login.yahoo.com/account/security
+- Check for typos in your `.env` file or Render environment variables
 
-1. Check the file path in your configuration is correct
-2. Ensure Node.js is installed and accessible
-3. Restart Claude Desktop completely
-4. Check Claude Desktop logs for errors
+#### 2. Docker build fails on Windows
 
-### Verification
+**Solution**: Check Docker Desktop settings
+- Ensure Docker Desktop is running
+- Check that WSL2 is enabled (Settings > General > Use WSL2 based engine)
+- Verify file sharing is enabled (Settings > Resources > File Sharing)
 
-Test if your server works:
+#### 3. Port 3000 already in use
 
+**Solution**: Change the port
+
+**Windows (PowerShell):**
+```powershell
+$env:PORT=3001; npm run start:sse
+```
+
+**Linux/macOS (Bash):**
 ```bash
+PORT=3001 npm run start:sse
+```
+
+Or edit `.env`:
+```env
+PORT=3001
+```
+
+#### 4. Render deployment fails
+
+**Solution**: Check the logs
+- Go to your Render dashboard
+- Click on your service
+- Click "Logs" tab
+- Look for error messages
+- Common issues:
+  - Missing environment variables
+  - Incorrect Dockerfile path
+  - Build timeout (increase build timeout in settings)
+
+#### 5. SSE connection drops
+
+**Solution**: Render free tier limitations
+- Free tier services sleep after 15 minutes of inactivity
+- First request after sleep takes 30-60 seconds to wake up
+- Upgrade to Starter plan ($7/month) for always-on service
+
+#### 6. IMAP connection timeout
+
+**Solution**: Check Yahoo Mail IMAP settings
+- Ensure IMAP is enabled in Yahoo Mail settings
+- Go to Yahoo Mail > Settings > More Settings > Mailboxes
+- Verify IMAP access is allowed
+- Check firewall settings aren't blocking port 993
+
+### Windows-Specific Issues
+
+#### Line Ending Problems
+
+If you see errors about line endings:
+
+**PowerShell:**
+```powershell
+# Configure git to handle line endings correctly
+git config --global core.autocrlf input
+
+# Re-clone the repository
+git clone <your-repo-url>
+```
+
+#### npm Scripts Not Working
+
+If cross-platform scripts fail:
+
+**PowerShell:**
+```powershell
+# Install cross-env globally
+npm install -g cross-env
+
+# Or run scripts directly
 node server.js
 ```
 
-Should output: `Yahoo Mail MCP server running on stdio`
+### Linux-Specific Issues
 
-## Security Notes
+#### Permission Errors with Docker
 
-- This server only provides **read-only** access to your emails
-- App passwords are more secure than using your main password
-- Environment variables keep your credentials separate from code
-- The server runs locally - your credentials don't leave your machine
+**Bash:**
+```bash
+# Add user to docker group
+sudo usermod -aG docker $USER
+
+# Logout and login again, or run:
+newgrp docker
+
+# Test
+docker ps
+```
+
+## Environment Variables Reference
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `YAHOO_EMAIL` | Yes | - | Your Yahoo Mail email address |
+| `YAHOO_APP_PASSWORD` | Yes | - | 16-character app-specific password |
+| `TRANSPORT_MODE` | No | `stdio` | Transport mode: `stdio` or `sse` |
+| `PORT` | No | `3000` | Port for SSE mode (auto-set by Render) |
+| `NODE_ENV` | No | `development` | Environment: `development` or `production` |
+| `YAHOO_CLIENT_ID` | No | - | OAuth2 client ID (optional, not implemented) |
+| `YAHOO_CLIENT_SECRET` | No | - | OAuth2 client secret (optional, not implemented) |
+
+## Available npm Scripts
+
+| Script | Description | Cross-Platform |
+|--------|-------------|----------------|
+| `npm start` | Start server (stdio mode) | ✅ |
+| `npm run start:stdio` | Start in stdio mode | ✅ |
+| `npm run start:sse` | Start in SSE mode | ✅ |
+| `npm run dev` | Development mode with auto-reload | ✅ |
+| `npm run docker:build` | Build Docker image | ✅ |
+| `npm run docker:run` | Run Docker container | ✅ |
+| `npm run docker:compose:up` | Start with Docker Compose | ✅ |
+| `npm run docker:compose:down` | Stop Docker Compose | ✅ |
+| `npm run docker:compose:logs` | View Docker Compose logs | ✅ |
+| `npm run test:health` | Test health endpoint | ✅ |
+| `npm run test:sse` | Test SSE endpoint | ✅ |
+
+## Project Structure
+
+```
+yahoo-mail-mcp-server/
+├── server.js                 # Main server code
+├── package.json             # Node.js dependencies and scripts
+├── Dockerfile               # Docker build configuration
+├── docker-compose.yml       # Docker Compose configuration
+├── render.yaml              # Render.com deployment config
+├── .env.example             # Environment variable template
+├── .env                     # Your local environment variables (gitignored)
+├── .dockerignore            # Files to exclude from Docker build
+├── .gitignore               # Files to exclude from git
+├── .gitattributes           # Git line ending configuration
+└── README.md                # This file
+```
+
+## Security Best Practices
+
+1. **Never commit credentials**
+   - `.env` file is gitignored
+   - Always use `.env.example` as template
+   - Set sensitive values in Render dashboard
+
+2. **Use app-specific passwords**
+   - Never use your main Yahoo password
+   - Generate new passwords for each service
+   - Revoke unused passwords regularly
+
+3. **Read-only access**
+   - Server only reads emails, never modifies
+   - No delete, send, or move operations
+   - Safe for production use
+
+4. **HTTPS in production**
+   - Render.com provides free SSL certificates
+   - All traffic is encrypted
+   - IMAP connection uses TLS
+
+## Development Workflow
+
+### Making Changes
+
+**Windows (PowerShell):**
+```powershell
+# 1. Make your changes to server.js
+
+# 2. Test locally
+npm run dev
+
+# 3. Test with Docker
+npm run docker:compose:up
+
+# 4. Commit and push
+git add .
+git commit -m "Description of changes"
+git push origin main
+
+# 5. Render automatically deploys the changes
+```
+
+**Linux/macOS (Bash):**
+```bash
+# 1. Make your changes to server.js
+
+# 2. Test locally
+npm run dev
+
+# 3. Test with Docker
+npm run docker:compose:up
+
+# 4. Commit and push
+git add .
+git commit -m "Description of changes"
+git push origin main
+
+# 5. Render automatically deploys the changes
+```
+
+### Viewing Logs
+
+**Local Development:**
+```bash
+# The server logs to stderr
+npm run start:sse
+```
+
+**Docker:**
+```bash
+npm run docker:compose:logs
+```
+
+**Render.com:**
+- Go to your service dashboard
+- Click "Logs" tab
+- Real-time logs appear here
+
+## API Endpoints
+
+When running in SSE mode, the server exposes these endpoints:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | API information and available tools |
+| `/health` | GET | Health check (returns status, version, timestamp) |
+| `/mcp/sse` | GET | Server-Sent Events endpoint for MCP |
+| `/mcp/message` | POST | Message endpoint for MCP communication |
+
+### Example Health Check Response
+
+```json
+{
+  "status": "ok",
+  "service": "yahoo-mail-mcp",
+  "version": "1.0.0",
+  "timestamp": "2025-01-11T12:34:56.789Z"
+}
+```
+
+## MCP Tools
+
+### list_emails
+
+List recent emails from your Yahoo Mail inbox.
+
+**Parameters:**
+- `count` (optional): Number of emails to retrieve (default: 10, max: 50)
+
+**Example:**
+```
+list_emails with count 20
+```
+
+### read_email
+
+Read the full content of a specific email.
+
+**Parameters:**
+- `sequenceNumber` (required): The sequence number of the email
+
+**Example:**
+```
+read_email with sequenceNumber 5
+```
+
+### search_emails
+
+Search emails by subject or sender.
+
+**Parameters:**
+- `query` (required): Search term for subject or sender
+- `count` (optional): Number of results to return (default: 10)
+
+**Example:**
+```
+search_emails with query "invoice" and count 15
+```
+
+## Performance Considerations
+
+### Render.com Free Tier
+
+- **Sleep after inactivity**: Services sleep after 15 minutes of no requests
+- **Wake-up time**: First request takes 30-60 seconds
+- **Monthly hours**: 750 hours/month (enough for moderate use)
+- **Upgrade**: $7/month for Starter plan (always-on)
+
+### IMAP Performance
+
+- **Connection pooling**: Each request creates a new IMAP connection
+- **Timeout**: 30 seconds for connection and auth
+- **Rate limiting**: Yahoo may throttle excessive requests
+- **Recommendation**: Cache results on client side when possible
+
+## Cross-Platform Compatibility
+
+This project is designed to work seamlessly on:
+
+- **Windows 10/11** with PowerShell or Command Prompt
+- **Linux** (Ubuntu, Debian, Fedora, etc.)
+- **macOS** (Intel and Apple Silicon)
+- **Docker Desktop** (Windows, Mac, Linux)
+- **WSL2** (Windows Subsystem for Linux)
+
+### Line Endings
+
+- `.gitattributes` ensures LF line endings in repository
+- Works correctly on Windows (CRLF) and Linux (LF)
+- Docker uses LF inside containers
+
+### Path Handling
+
+- All paths use forward slashes in code
+- `path.join()` used for cross-platform compatibility
+- Works with Windows backslashes and Unix forward slashes
 
 ## Contributing
 
 1. Fork the repository
-2. Create a feature branch
+2. Create a feature branch: `git checkout -b feature-name`
 3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
+4. Test on both Windows and Linux (if possible)
+5. Commit: `git commit -am "Add feature"`
+6. Push: `git push origin feature-name`
+7. Create a Pull Request
 
 ## License
 
-MIT License - see LICENSE file for details
+MIT License - See LICENSE file for details
 
 ## Support
 
-If you encounter issues:
-1. Check the troubleshooting section above
-2. Verify your Yahoo Mail IMAP settings
-3. Test the server independently with `node server.js`
-4. Open an issue with error details and your configuration (remove credentials)
+- **Issues**: Report bugs at https://github.com/yourusername/yahoo-mail-mcp-server/issues
+- **Discussions**: Ask questions in GitHub Discussions
+- **MCP Docs**: https://modelcontextprotocol.io
+
+## Changelog
+
+### v1.0.0 (2025-01-11)
+
+- Initial release
+- Support for stdio and SSE transports
+- Docker and Docker Compose support
+- Render.com deployment configuration
+- Cross-platform compatibility (Windows/Linux)
+- Three core tools: list_emails, read_email, search_emails
+
+## Acknowledgments
+
+- Built with [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/sdk)
+- Uses [imap](https://github.com/mscdex/node-imap) for IMAP access
+- Uses [mailparser](https://github.com/nodemailer/mailparser) for email parsing
+- Deployed on [Render.com](https://render.com)
+
+## FAQ
+
+### Q: Can I use this with Gmail or other email providers?
+
+A: Currently, this server is configured for Yahoo Mail. To support other providers, you'd need to modify the IMAP configuration in `server.js` (lines 166-179).
+
+### Q: Is this safe to use with my email account?
+
+A: Yes! The server is read-only and uses app-specific passwords (not your main password). It only reads emails and never modifies, deletes, or sends emails.
+
+### Q: How much does it cost to run on Render?
+
+A: The free tier provides 750 hours/month, which is enough for moderate use. For always-on service, the Starter plan is $7/month.
+
+### Q: Can I run this on other cloud platforms?
+
+A: Yes! The Docker configuration works on any platform that supports Docker containers (AWS ECS, Google Cloud Run, Azure Container Instances, Heroku, Fly.io, etc.).
+
+### Q: Do I need to keep my computer running?
+
+A: No! Once deployed to Render.com (or another cloud platform), the server runs independently in the cloud.
+
+### Q: How do I update the server after deployment?
+
+A: Simply push your changes to GitHub. Render automatically detects the push and redeploys the service.
+
+### Q: Can multiple people use the same deployed server?
+
+A: The server connects to a single Yahoo Mail account (the one configured in environment variables). Each user would need their own deployment for their own email account.
+
+### Q: What if I forget my app-specific password?
+
+A: You can generate a new one at https://login.yahoo.com/account/security/app-passwords and update it in your Render environment variables (Settings > Environment).
+
+## Next Steps
+
+After successful deployment:
+
+1. ✅ Test the health endpoint
+2. ✅ Connect to Claude.ai
+3. ✅ Try listing your emails
+4. ✅ Read a few emails
+5. ✅ Search your inbox
+6. 🎉 Enjoy your Yahoo Mail MCP server!
+
+---
+
+**Happy Coding!** If you have questions or issues, please open an issue on GitHub.

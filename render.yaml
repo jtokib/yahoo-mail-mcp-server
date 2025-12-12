@@ -1,0 +1,45 @@
+# Render.com deployment configuration
+# This file enables automatic deployments from your GitHub repository
+
+services:
+  # Web service for the Yahoo Mail MCP Server
+  - type: web
+    name: yahoo-mail-mcp-server
+    runtime: docker
+    plan: free  # Change to 'starter' or higher for production use
+    region: oregon  # Choose: oregon, frankfurt, singapore, ohio
+
+    # Build configuration
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+
+    # Environment variables (set sensitive values in Render Dashboard)
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TRANSPORT_MODE
+        value: sse
+      - key: PORT
+        fromService:
+          type: web
+          name: yahoo-mail-mcp-server
+          property: port
+      - key: YAHOO_EMAIL
+        sync: false  # Set this in Render Dashboard (Settings > Environment)
+      - key: YAHOO_APP_PASSWORD
+        sync: false  # Set this in Render Dashboard (Settings > Environment)
+
+    # Health check configuration
+    healthCheckPath: /health
+
+    # Auto-deploy settings
+    autoDeploy: true
+
+    # Scaling (for paid plans)
+    numInstances: 1
+
+    # Resource limits (for paid plans)
+    # disk:
+    #   name: data
+    #   mountPath: /data
+    #   sizeGB: 1

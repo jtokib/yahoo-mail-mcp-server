@@ -1,0 +1,63 @@
+# Git files
+.git
+.gitignore
+.gitattributes
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Node.js
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+
+# IDE and editor files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation and notes
+README.md
+CLAUDE.md
+*.md
+!package.json
+
+# Docker files (not needed inside the image)
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Render configuration
+render.yaml
+
+# Test and development files
+test/
+tests/
+*.test.js
+*.spec.js
+
+# Logs
+logs
+*.log
+debug.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# CI/CD
+.github
+.gitlab-ci.yml
+.travis.yml
