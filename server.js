@@ -535,7 +535,7 @@ class YahooMailMCPServer {
                 req.path === '/' ||
                 req.path.startsWith('/.well-known/') ||
                 req.path === '/register' ||
-                req.path === '/oauth/token') {
+                req.path.startsWith('/oauth/')) {
                 return next();
             }
 
@@ -576,6 +576,20 @@ class YahooMailMCPServer {
         // Apply authentication to all MCP endpoints
         app.use(authenticateMCP);
 
+        // OpenID Configuration (superset of OAuth authorization server metadata)
+        app.get('/.well-known/openid-configuration', (req, res) => {
+            console.error('[OAuth] OpenID configuration requested');
+            const baseUrl = `https://${req.get('host')}`;
+            res.json({
+                issuer: baseUrl,
+                token_endpoint: `${baseUrl}/oauth/token`,
+                grant_types_supported: ['client_credentials'],
+                token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
+                scopes_supported: ['mcp'],
+                response_types_supported: []
+            });
+        });
+
         // OAuth 2.0 Authorization Server Metadata (RFC 8414)
         app.get('/.well-known/oauth-authorization-server', (req, res) => {
             console.error('[OAuth] Authorization server metadata requested');
@@ -585,8 +599,8 @@ class YahooMailMCPServer {
                 token_endpoint: `${baseUrl}/oauth/token`,
                 grant_types_supported: ['client_credentials'],
                 token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
-                response_types_supported: ['token'],
-                scopes_supported: ['mcp']
+                scopes_supported: ['mcp'],
+                response_types_supported: []
             });
         });
 
