@@ -4,6 +4,7 @@ A Model Context Protocol (MCP) server that provides read-only access to Yahoo Ma
 
 ## Features
 
+- **Secure OAuth 2.0 Authentication**: Protect your remote MCP server with OAuth 2.0 authorization code flow with PKCE
 - **Read-Only Access**: Safely browse your Yahoo Mail without modification capabilities
 - **Three Core Tools**:
   - `list_emails`: List recent emails from your inbox
@@ -14,7 +15,7 @@ A Model Context Protocol (MCP) server that provides read-only access to Yahoo Ma
   - `sse`: For remote access via HTTP/Server-Sent Events (required for Render.com)
 - **Cross-Platform**: Works on both Windows and Linux development environments
 - **Docker Support**: Containerized deployment with Docker and Docker Compose
-- **Cloud Ready**: Configured for easy deployment to Render.com
+- **Cloud Ready**: Configured for easy deployment to Render.com with OAuth security
 
 ## Prerequisites
 
@@ -279,16 +280,19 @@ git push -u origin main
 
    In the "Environment" section, click "Add Environment Variable" and add:
 
-   | Key | Value |
-   |-----|-------|
-   | `NODE_ENV` | `production` |
-   | `TRANSPORT_MODE` | `sse` |
-   | `YAHOO_EMAIL` | `your.email@yahoo.com` |
-   | `YAHOO_APP_PASSWORD` | `your16charpassword` |
+   | Key | Value | How to Generate |
+   |-----|-------|-----------------|
+   | `NODE_ENV` | `production` | - |
+   | `TRANSPORT_MODE` | `sse` | - |
+   | `YAHOO_EMAIL` | `your.email@yahoo.com` | Your Yahoo email address |
+   | `YAHOO_APP_PASSWORD` | `your16charpassword` | See "Get Yahoo Mail App Password" section |
+   | `OAUTH_CLIENT_ID` | `32-char-hex-string` | Run: `openssl rand -hex 16` |
+   | `OAUTH_CLIENT_SECRET` | `64-char-hex-string` | Run: `openssl rand -hex 32` |
 
    **Important**:
-   - Mark `YAHOO_EMAIL` and `YAHOO_APP_PASSWORD` as "Secret"
+   - Mark `YAHOO_EMAIL`, `YAHOO_APP_PASSWORD`, `OAUTH_CLIENT_ID`, and `OAUTH_CLIENT_SECRET` as "Secret"
    - `PORT` is automatically set by Render, don't add it manually
+   - Save the OAuth credentials - you'll need them to configure Claude Desktop
 
 5. **Deploy**
    - Click "Create Web Service"
@@ -299,32 +303,39 @@ git push -u origin main
    - Once deployed, you'll get a URL like: `https://yahoo-mail-mcp-server.onrender.com`
    - Test it by visiting: `https://yahoo-mail-mcp-server.onrender.com/health`
 
-### Step 3: Connect to Claude.ai
+### Step 3: Connect to Claude Desktop
 
-1. **Open Claude.ai**
-   - Go to https://claude.ai
-   - Login to your account
+**Note**: Remote MCP servers require a Claude Pro, Max, Team, or Enterprise plan.
+
+1. **Open Claude Desktop**
+   - Launch the Claude Desktop app on your computer
 
 2. **Add MCP Connector**
-   - Click on your profile icon
+   - Click on your profile icon or menu
    - Select "Settings"
-   - Navigate to "Connectors" or "MCP Servers"
-   - Click "Add Connector" or "Add Server"
+   - Navigate to "Connectors" section
+   - Click "Add Custom Connector"
 
 3. **Configure the Connector**
-   - **Name**: Yahoo Mail
+   - **Name**: `Yahoo Mail`
    - **URL**: `https://your-service-name.onrender.com/mcp/sse`
-   - **Type**: Server-Sent Events (SSE)
 
    Example:
    ```
    https://yahoo-mail-mcp-server.onrender.com/mcp/sse
    ```
 
-4. **Test the Connection**
-   - Click "Test Connection" or "Save"
-   - If successful, you'll see a green checkmark
-   - You can now use Yahoo Mail tools in your Claude.ai conversations!
+4. **Configure OAuth Authentication**
+   - Click **"Advanced Settings"** ⚙️
+   - Enter the OAuth credentials from Step 4:
+     - **OAuth Client ID**: The value from `OAUTH_CLIENT_ID` environment variable
+     - **OAuth Client Secret**: The value from `OAUTH_CLIENT_SECRET` environment variable
+
+5. **Save and Test**
+   - Click "Add" or "Save"
+   - Claude Desktop will authenticate using OAuth 2.0
+   - If successful, you'll see the connector active
+   - You can now use Yahoo Mail tools in your conversations!
 
 ### Step 4: Using the MCP Server in Claude.ai
 
@@ -451,12 +462,14 @@ docker ps
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `YAHOO_EMAIL` | Yes | - | Your Yahoo Mail email address |
-| `YAHOO_APP_PASSWORD` | Yes | - | 16-character app-specific password |
+| `YAHOO_APP_PASSWORD` | Yes | - | 16-character app-specific password from Yahoo |
+| `OAUTH_CLIENT_ID` | Yes (Remote) | - | OAuth 2.0 client ID for MCP server authentication (generate with `openssl rand -hex 16`) |
+| `OAUTH_CLIENT_SECRET` | Yes (Remote) | - | OAuth 2.0 client secret for MCP server authentication (generate with `openssl rand -hex 32`) |
 | `TRANSPORT_MODE` | No | `stdio` | Transport mode: `stdio` or `sse` |
 | `PORT` | No | `3000` | Port for SSE mode (auto-set by Render) |
 | `NODE_ENV` | No | `development` | Environment: `development` or `production` |
-| `YAHOO_CLIENT_ID` | No | - | OAuth2 client ID (optional, not implemented) |
-| `YAHOO_CLIENT_SECRET` | No | - | OAuth2 client secret (optional, not implemented) |
+
+**Note**: `OAUTH_CLIENT_ID` and `OAUTH_CLIENT_SECRET` are only required for remote deployments (Render.com). Local stdio mode doesn't require OAuth.
 
 ## Available npm Scripts
 
@@ -493,25 +506,36 @@ yahoo-mail-mcp-server/
 
 ## Security Best Practices
 
-1. **Never commit credentials**
+1. **OAuth 2.0 Protection** (Remote Deployments)
+   - Server requires OAuth 2.0 authentication for all MCP requests
+   - Uses authorization code flow with PKCE (Proof Key for Code Exchange)
+   - Only clients with correct credentials can access your emails
+   - Generate strong random credentials: `openssl rand -hex 16` and `openssl rand -hex 32`
+   - Store credentials securely in Render dashboard (marked as "Secret")
+
+2. **Never commit credentials**
    - `.env` file is gitignored
    - Always use `.env.example` as template
    - Set sensitive values in Render dashboard
+   - Never share OAuth credentials publicly
 
-2. **Use app-specific passwords**
+3. **Use app-specific passwords**
    - Never use your main Yahoo password
    - Generate new passwords for each service
    - Revoke unused passwords regularly
+   - App passwords can be revoked without changing your main password
 
-3. **Read-only access**
+4. **Read-only access**
    - Server only reads emails, never modifies
    - No delete, send, or move operations
    - Safe for production use
+   - Minimal permissions required
 
-4. **HTTPS in production**
+5. **HTTPS in production**
    - Render.com provides free SSL certificates
-   - All traffic is encrypted
+   - All traffic is encrypted (TLS/SSL)
    - IMAP connection uses TLS
+   - OAuth tokens transmitted securely
 
 ## Development Workflow
 
@@ -579,8 +603,12 @@ When running in SSE mode, the server exposes these endpoints:
 |----------|--------|-------------|
 | `/` | GET | API information and available tools |
 | `/health` | GET | Health check (returns status, version, timestamp) |
-| `/mcp/sse` | GET | Server-Sent Events endpoint for MCP |
-| `/mcp/message` | POST | Message endpoint for MCP communication |
+| `/mcp/sse` | GET | Server-Sent Events endpoint for MCP (requires OAuth token) |
+| `/mcp/message` | POST | Message endpoint for MCP communication (requires OAuth token) |
+| `/.well-known/oauth-authorization-server` | GET | OAuth 2.0 server metadata (RFC 8414) |
+| `/.well-known/openid-configuration` | GET | OpenID Connect discovery endpoint |
+| `/oauth/authorize` | GET | OAuth 2.0 authorization endpoint |
+| `/oauth/token` | POST | OAuth 2.0 token endpoint |
 
 ### Example Health Check Response
 
