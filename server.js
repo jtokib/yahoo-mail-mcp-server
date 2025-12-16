@@ -142,12 +142,6 @@ class YahooMailMCPServer {
      */
     async createImapConnection() {
         return new Promise((resolve, reject) => {
-            // Log environment check (without exposing credentials)
-            console.error('[IMAP] Attempting connection...');
-            console.error('[IMAP] Email configured:', !!process.env.YAHOO_EMAIL);
-            console.error('[IMAP] Password configured:', !!process.env.YAHOO_APP_PASSWORD);
-            console.error('[IMAP] Email value:', process.env.YAHOO_EMAIL ? process.env.YAHOO_EMAIL.substring(0, 3) + '***' : 'undefined');
-
             if (!process.env.YAHOO_EMAIL || !process.env.YAHOO_APP_PASSWORD) {
                 const error = new Error('YAHOO_EMAIL or YAHOO_APP_PASSWORD environment variables are not set');
                 console.error('[IMAP] Configuration error:', error.message);
@@ -164,29 +158,21 @@ class YahooMailMCPServer {
                 authTimeout: 30000,
                 connTimeout: 30000,
                 tlsOptions: {
-                    rejectUnauthorized: true,  // Changed to true for production
+                    rejectUnauthorized: true,
                     servername: 'imap.mail.yahoo.com',
                     minVersion: 'TLSv1.2'
-                },
-                debug: console.error  // Enable IMAP debug logging
+                }
             });
 
             imap.once('ready', () => {
-                console.error('[IMAP] Connection successful');
                 resolve(imap);
             });
 
             imap.once('error', (err) => {
                 console.error('[IMAP] Connection error:', err.message);
-                console.error('[IMAP] Error details:', JSON.stringify(err, null, 2));
                 reject(err);
             });
 
-            imap.once('end', () => {
-                console.error('[IMAP] Connection ended');
-            });
-
-            console.error('[IMAP] Initiating connection to imap.mail.yahoo.com:993');
             imap.connect();
         });
     }
@@ -664,18 +650,13 @@ class YahooMailMCPServer {
 
         // OAuth Token Endpoint (supports both Authorization Code and Client Credentials flows)
         app.post('/oauth/token', async (req, res) => {
-            console.error('[OAuth] Token request received');
-            console.error('[OAuth] Content-Type:', req.headers['content-type']);
-            console.error('[OAuth] Body keys:', req.body ? Object.keys(req.body).join(', ') : 'NO BODY');
-            console.error('[OAuth] Grant type:', req.body?.grant_type);
+            console.error('[OAuth] Token request - grant type:', req.body?.grant_type || 'unknown');
 
             const clientId = process.env.OAUTH_CLIENT_ID;
             const clientSecret = process.env.OAUTH_CLIENT_SECRET;
 
-            console.error('[OAuth] Expected client_id:', clientId ? clientId.substring(0, 8) + '...' : 'NOT SET');
-
             if (!clientId || !clientSecret) {
-                console.error('[OAuth] OAuth not configured - missing OAUTH_CLIENT_ID or OAUTH_CLIENT_SECRET');
+                console.error('[OAuth] Server misconfigured - OAuth credentials not set');
                 return res.status(500).json({
                     error: 'server_error',
                     error_description: 'OAuth not configured on server'
@@ -684,25 +665,19 @@ class YahooMailMCPServer {
 
             // Extract credentials from Authorization header (Basic Auth) or request body
             let reqClientId, reqClientSecret;
-
             const authHeader = req.headers.authorization;
+
             if (authHeader && authHeader.startsWith('Basic ')) {
                 const credentials = Buffer.from(authHeader.substring(6), 'base64').toString();
                 [reqClientId, reqClientSecret] = credentials.split(':');
-                console.error('[OAuth] Credentials from Basic Auth header');
             } else {
                 reqClientId = req.body?.client_id;
                 reqClientSecret = req.body?.client_secret;
-                console.error('[OAuth] Credentials from request body');
             }
-
-            console.error('[OAuth] Received client_id:', reqClientId ? reqClientId.substring(0, 8) + '...' : 'NOT PROVIDED');
-            console.error('[OAuth] Client ID match:', reqClientId === clientId);
-            console.error('[OAuth] Client secret match:', reqClientSecret === clientSecret);
 
             // Validate credentials
             if (reqClientId !== clientId || reqClientSecret !== clientSecret) {
-                console.error('[OAuth] Invalid client credentials - authentication failed');
+                console.error('[OAuth] Authentication failed - invalid client credentials');
                 return res.status(401).json({
                     error: 'invalid_client',
                     error_description: 'Invalid client credentials'
