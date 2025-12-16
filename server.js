@@ -509,7 +509,14 @@ class YahooMailMCPServer {
             maxAge: 86400  // Cache preflight for 24 hours
         }));
 
-        app.use(express.json());
+        // Parse JSON for all routes EXCEPT /mcp/message (which needs raw body for SSE)
+        app.use((req, res, next) => {
+            if (req.path === '/mcp/message') {
+                next();
+            } else {
+                express.json()(req, res, next);
+            }
+        });
 
         // Request logging middleware
         app.use((req, res, next) => {
@@ -613,11 +620,10 @@ class YahooMailMCPServer {
         // Message endpoint for SSE
         app.post('/mcp/message', async (req, res) => {
             console.error('[SSE] Received message on /mcp/message');
-            console.error('[SSE] Message body:', JSON.stringify(req.body).substring(0, 200));
             console.error('[SSE] Active transports:', this.transports.size);
 
-            // Extract session ID from request
-            const sessionId = req.body?.sessionId || req.query?.sessionId || req.headers['x-session-id'];
+            // Extract session ID from query or headers (body not parsed yet)
+            const sessionId = req.query?.sessionId || req.headers['x-session-id'];
             console.error('[SSE] Session ID from request:', sessionId);
 
             if (sessionId && this.transports.has(sessionId)) {
