@@ -524,6 +524,51 @@ class YahooMailMCPServer {
             next();
         });
 
+        // Authentication middleware for MCP endpoints
+        const authenticateMCP = (req, res, next) => {
+            // Skip auth for health check and OAuth discovery endpoints
+            if (req.path === '/health' ||
+                req.path === '/' ||
+                req.path.startsWith('/.well-known/') ||
+                req.path === '/register') {
+                return next();
+            }
+
+            const authToken = process.env.MCP_AUTH_TOKEN;
+
+            // If no token is configured, allow access (backward compatibility)
+            // WARNING: This is insecure! Set MCP_AUTH_TOKEN in production
+            if (!authToken) {
+                console.error('[Auth] WARNING: MCP_AUTH_TOKEN not set - server is UNSECURED!');
+                return next();
+            }
+
+            // Check for Bearer token in Authorization header
+            const authHeader = req.headers.authorization;
+            if (!authHeader || !authHeader.startsWith('Bearer ')) {
+                console.error('[Auth] Missing or invalid Authorization header');
+                return res.status(401).json({
+                    error: 'unauthorized',
+                    error_description: 'Bearer token required'
+                });
+            }
+
+            const token = authHeader.substring(7); // Remove 'Bearer ' prefix
+            if (token !== authToken) {
+                console.error('[Auth] Invalid token provided');
+                return res.status(403).json({
+                    error: 'forbidden',
+                    error_description: 'Invalid bearer token'
+                });
+            }
+
+            console.error('[Auth] Authentication successful');
+            next();
+        };
+
+        // Apply authentication to all MCP endpoints
+        app.use(authenticateMCP);
+
         // OAuth discovery endpoints for MCP (authless server)
         // These endpoints are queried by Claude Desktop to discover OAuth capabilities
 
