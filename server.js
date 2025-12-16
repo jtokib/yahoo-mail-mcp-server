@@ -41,6 +41,9 @@ class YahooMailMCPServer {
         this.accessToken = null;
         this.refreshToken = null;
 
+        // Store active SSE transports (for routing messages)
+        this.transports = new Map();
+
         this.setupToolHandlers();
         this.setupErrorHandling();
     }
@@ -582,12 +585,21 @@ class YahooMailMCPServer {
                 console.error('[SSE] Origin:', req.headers.origin);
                 console.error('[SSE] User-Agent:', req.headers['user-agent']);
 
-                // Set SSE-specific headers
-                res.setHeader('Content-Type', 'text/event-stream');
-                res.setHeader('Cache-Control', 'no-cache');
-                res.setHeader('Connection', 'keep-alive');
-
                 const transport = new SSEServerTransport('/mcp/message', res);
+
+                // Get session ID from transport
+                const sessionId = transport.sessionId;
+                console.error('[SSE] Session ID:', sessionId);
+
+                // Store the transport for message routing
+                this.transports.set(sessionId, transport);
+
+                // Clean up on disconnect
+                transport.onclose = () => {
+                    console.error('[SSE] Connection closed, cleaning up session:', sessionId);
+                    this.transports.delete(sessionId);
+                };
+
                 await this.server.connect(transport);
                 console.error('[SSE] MCP server connected to transport');
             } catch (error) {
@@ -602,8 +614,29 @@ class YahooMailMCPServer {
         app.post('/mcp/message', async (req, res) => {
             console.error('[SSE] Received message on /mcp/message');
             console.error('[SSE] Message body:', JSON.stringify(req.body).substring(0, 200));
-            // The SSEServerTransport handles this internally
-            res.status(200).end();
+            console.error('[SSE] Active transports:', this.transports.size);
+
+            // Extract session ID from request
+            const sessionId = req.body?.sessionId || req.query?.sessionId || req.headers['x-session-id'];
+            console.error('[SSE] Session ID from request:', sessionId);
+
+            if (sessionId && this.transports.has(sessionId)) {
+                const transport = this.transports.get(sessionId);
+                console.error('[SSE] Routing message to transport:', sessionId);
+                // Let the transport handle the message
+                transport.handlePostMessage(req, res);
+            } else {
+                // If no session ID or transport not found, try the first available transport
+                // (for backwards compatibility with single-connection scenario)
+                const firstTransport = Array.from(this.transports.values())[0];
+                if (firstTransport) {
+                    console.error('[SSE] No session ID, using first available transport');
+                    firstTransport.handlePostMessage(req, res);
+                } else {
+                    console.error('[SSE] No active transport found');
+                    res.status(404).json({ error: 'No active SSE connection found' });
+                }
+            }
         });
 
         // Error handling middleware
