@@ -654,9 +654,12 @@ class YahooMailMCPServer {
         // OAuth Token Endpoint (supports both Authorization Code and Client Credentials flows)
         app.post('/oauth/token', async (req, res) => {
             console.error('[OAuth] Token request received');
+            console.error('[OAuth] Grant type:', req.body?.grant_type);
 
             const clientId = process.env.OAUTH_CLIENT_ID;
             const clientSecret = process.env.OAUTH_CLIENT_SECRET;
+
+            console.error('[OAuth] Expected client_id:', clientId ? clientId.substring(0, 8) + '...' : 'NOT SET');
 
             if (!clientId || !clientSecret) {
                 console.error('[OAuth] OAuth not configured - missing OAUTH_CLIENT_ID or OAUTH_CLIENT_SECRET');
@@ -673,14 +676,20 @@ class YahooMailMCPServer {
             if (authHeader && authHeader.startsWith('Basic ')) {
                 const credentials = Buffer.from(authHeader.substring(6), 'base64').toString();
                 [reqClientId, reqClientSecret] = credentials.split(':');
+                console.error('[OAuth] Credentials from Basic Auth header');
             } else {
                 reqClientId = req.body?.client_id;
                 reqClientSecret = req.body?.client_secret;
+                console.error('[OAuth] Credentials from request body');
             }
+
+            console.error('[OAuth] Received client_id:', reqClientId ? reqClientId.substring(0, 8) + '...' : 'NOT PROVIDED');
+            console.error('[OAuth] Client ID match:', reqClientId === clientId);
+            console.error('[OAuth] Client secret match:', reqClientSecret === clientSecret);
 
             // Validate credentials
             if (reqClientId !== clientId || reqClientSecret !== clientSecret) {
-                console.error('[OAuth] Invalid client credentials');
+                console.error('[OAuth] Invalid client credentials - authentication failed');
                 return res.status(401).json({
                     error: 'invalid_client',
                     error_description: 'Invalid client credentials'
