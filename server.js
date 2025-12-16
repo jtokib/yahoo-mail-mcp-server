@@ -705,7 +705,7 @@ class YahooMailMCPServer {
         });
 
         // OAuth Token Endpoint (supports both Authorization Code and Client Credentials flows)
-        app.post('/oauth/token', (req, res) => {
+        app.post('/oauth/token', async (req, res) => {
             console.error('[OAuth] Token request received');
 
             const clientId = process.env.OAUTH_CLIENT_ID;
