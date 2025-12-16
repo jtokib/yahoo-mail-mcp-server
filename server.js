@@ -32,15 +32,6 @@ class YahooMailMCPServer {
             }
         );
 
-        // OAuth2 credentials - these would typically come from Yahoo Developer Console
-        this.clientId = process.env.YAHOO_CLIENT_ID;
-        this.clientSecret = process.env.YAHOO_CLIENT_SECRET;
-        this.redirectUri = 'http://localhost:8080/callback';
-
-        // Store tokens (in production, you'd use persistent storage)
-        this.accessToken = null;
-        this.refreshToken = null;
-
         // Store active SSE transports (for routing messages)
         this.transports = new Map();
 
@@ -144,37 +135,6 @@ class YahooMailMCPServer {
                 };
             }
         });
-    }
-
-    /**
-     * Start OAuth2 flow
-     */
-    async startOAuthFlow() {
-        if (!this.clientId || !this.clientSecret) {
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: `🔐 OAuth2 Setup Required!\n\nTo use Yahoo Mail OAuth2, you need to:\n\n1. Go to https://developer.yahoo.com/apps/\n2. Create a new app\n3. Set redirect URI to: ${this.redirectUri}\n4. Get your Client ID and Client Secret\n5. Set environment variables:\n   YAHOO_CLIENT_ID=your_client_id\n   YAHOO_CLIENT_SECRET=your_client_secret\n\nFor now, let's use a simpler approach with Gmail API or enable IMAP in Yahoo Mail settings.`
-                    }
-                ]
-            };
-        }
-
-        const authUrl = `https://api.login.yahoo.com/oauth2/request_auth?` +
-            `client_id=${this.clientId}&` +
-            `redirect_uri=${encodeURIComponent(this.redirectUri)}&` +
-            `response_type=code&` +
-            `scope=mail-r`;
-
-        return {
-            content: [
-                {
-                    type: 'text',
-                    text: `🔐 Yahoo Mail OAuth2 Login\n\n1. Open this URL in your browser:\n${authUrl}\n\n2. Authorize the app\n3. Copy the authorization code from the callback URL\n4. Use the 'oauth_callback' tool with the code`
-                }
-            ]
-        };
     }
 
     /**
@@ -580,11 +540,10 @@ class YahooMailMCPServer {
         // Apply authentication to all MCP endpoints
         app.use(authenticateMCP);
 
-        // OpenID Configuration (superset of OAuth authorization server metadata)
-        app.get('/.well-known/openid-configuration', (req, res) => {
-            console.error('[OAuth] OpenID configuration requested');
+        // Helper function to generate OAuth metadata
+        const getOAuthMetadata = (req) => {
             const baseUrl = `https://${req.get('host')}`;
-            res.json({
+            return {
                 issuer: baseUrl,
                 authorization_endpoint: `${baseUrl}/oauth/authorize`,
                 token_endpoint: `${baseUrl}/oauth/token`,
@@ -593,57 +552,45 @@ class YahooMailMCPServer {
                 token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
                 code_challenge_methods_supported: ['S256'],
                 scopes_supported: ['mcp']
-            });
+            };
+        };
+
+        // Helper function to generate protected resource metadata
+        const getProtectedResourceMetadata = (req, resourcePath = '') => {
+            const baseUrl = `https://${req.get('host')}`;
+            return {
+                resource: resourcePath ? `${baseUrl}${resourcePath}` : baseUrl,
+                authorization_servers: [baseUrl],
+                scopes_supported: ['mcp']
+            };
+        };
+
+        // OpenID Configuration (superset of OAuth authorization server metadata)
+        app.get('/.well-known/openid-configuration', (req, res) => {
+            console.error('[OAuth] OpenID configuration requested');
+            res.json(getOAuthMetadata(req));
         });
 
         // OAuth 2.0 Authorization Server Metadata (RFC 8414)
         app.get('/.well-known/oauth-authorization-server', (req, res) => {
             console.error('[OAuth] Authorization server metadata requested');
-            const baseUrl = `https://${req.get('host')}`;
-            res.json({
-                issuer: baseUrl,
-                authorization_endpoint: `${baseUrl}/oauth/authorize`,
-                token_endpoint: `${baseUrl}/oauth/token`,
-                grant_types_supported: ['authorization_code', 'client_credentials'],
-                response_types_supported: ['code'],
-                token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
-                code_challenge_methods_supported: ['S256'],
-                scopes_supported: ['mcp']
-            });
+            res.json(getOAuthMetadata(req));
         });
 
         app.get('/.well-known/oauth-authorization-server/mcp/sse', (req, res) => {
             console.error('[OAuth] Authorization server metadata for /mcp/sse requested');
-            const baseUrl = `https://${req.get('host')}`;
-            res.json({
-                issuer: baseUrl,
-                token_endpoint: `${baseUrl}/oauth/token`,
-                grant_types_supported: ['client_credentials'],
-                token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
-                response_types_supported: ['token'],
-                scopes_supported: ['mcp']
-            });
+            res.json(getOAuthMetadata(req));
         });
 
         // OAuth Protected Resource Metadata
         app.get('/.well-known/oauth-protected-resource', (req, res) => {
             console.error('[OAuth] Protected resource metadata requested');
-            const baseUrl = `https://${req.get('host')}`;
-            res.json({
-                resource: baseUrl,
-                authorization_servers: [baseUrl],
-                scopes_supported: ['mcp']
-            });
+            res.json(getProtectedResourceMetadata(req));
         });
 
         app.get('/.well-known/oauth-protected-resource/mcp/sse', (req, res) => {
             console.error('[OAuth] Protected resource metadata for /mcp/sse requested');
-            const baseUrl = `https://${req.get('host')}`;
-            res.json({
-                resource: `${baseUrl}/mcp/sse`,
-                authorization_servers: [baseUrl],
-                scopes_supported: ['mcp']
-            });
+            res.json(getProtectedResourceMetadata(req, '/mcp/sse'));
         });
 
         // OAuth Authorization Endpoint (Authorization Code Flow)
