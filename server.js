@@ -44,6 +44,10 @@ class YahooMailMCPServer {
         // Store active SSE transports (for routing messages)
         this.transports = new Map();
 
+        // Store valid OAuth access tokens (in-memory)
+        // In production, use Redis or a database with TTL
+        this.validTokens = new Set();
+
         this.setupToolHandlers();
         this.setupErrorHandling();
     }
@@ -526,24 +530,25 @@ class YahooMailMCPServer {
 
         // Authentication middleware for MCP endpoints
         const authenticateMCP = (req, res, next) => {
-            // Skip auth for health check and OAuth discovery endpoints
+            // Skip auth for health check, OAuth endpoints, and discovery endpoints
             if (req.path === '/health' ||
                 req.path === '/' ||
                 req.path.startsWith('/.well-known/') ||
-                req.path === '/register') {
+                req.path === '/register' ||
+                req.path === '/oauth/token') {
                 return next();
             }
 
-            const authToken = process.env.MCP_AUTH_TOKEN;
+            // Check if OAuth is configured
+            const oauthConfigured = process.env.OAUTH_CLIENT_ID && process.env.OAUTH_CLIENT_SECRET;
 
-            // If no token is configured, allow access (backward compatibility)
-            // WARNING: This is insecure! Set MCP_AUTH_TOKEN in production
-            if (!authToken) {
-                console.error('[Auth] WARNING: MCP_AUTH_TOKEN not set - server is UNSECURED!');
+            if (!oauthConfigured) {
+                console.error('[Auth] WARNING: OAuth not configured - server is UNSECURED!');
+                console.error('[Auth] Set OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET to secure your server');
                 return next();
             }
 
-            // Check for Bearer token in Authorization header
+            // Validate OAuth Bearer token
             const authHeader = req.headers.authorization;
             if (!authHeader || !authHeader.startsWith('Bearer ')) {
                 console.error('[Auth] Missing or invalid Authorization header');
@@ -554,62 +559,139 @@ class YahooMailMCPServer {
             }
 
             const token = authHeader.substring(7); // Remove 'Bearer ' prefix
-            if (token !== authToken) {
-                console.error('[Auth] Invalid token provided');
-                return res.status(403).json({
-                    error: 'forbidden',
-                    error_description: 'Invalid bearer token'
+
+            // Validate token (check if it's in our valid tokens set)
+            if (!this.validTokens || !this.validTokens.has(token)) {
+                console.error('[Auth] Invalid or expired access token');
+                return res.status(401).json({
+                    error: 'invalid_token',
+                    error_description: 'The access token is invalid or has expired'
                 });
             }
 
-            console.error('[Auth] Authentication successful');
+            console.error('[Auth] OAuth authentication successful');
             next();
         };
 
         // Apply authentication to all MCP endpoints
         app.use(authenticateMCP);
 
-        // OAuth discovery endpoints for MCP (authless server)
-        // These endpoints are queried by Claude Desktop to discover OAuth capabilities
-
+        // OAuth 2.0 Authorization Server Metadata (RFC 8414)
         app.get('/.well-known/oauth-authorization-server', (req, res) => {
             console.error('[OAuth] Authorization server metadata requested');
-            res.status(404).json({
-                error: 'not_supported',
-                error_description: 'This server does not support OAuth authentication'
+            const baseUrl = `https://${req.get('host')}`;
+            res.json({
+                issuer: baseUrl,
+                token_endpoint: `${baseUrl}/oauth/token`,
+                grant_types_supported: ['client_credentials'],
+                token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
+                response_types_supported: ['token'],
+                scopes_supported: ['mcp']
             });
         });
 
         app.get('/.well-known/oauth-authorization-server/mcp/sse', (req, res) => {
             console.error('[OAuth] Authorization server metadata for /mcp/sse requested');
-            res.status(404).json({
-                error: 'not_supported',
-                error_description: 'This server does not support OAuth authentication'
+            const baseUrl = `https://${req.get('host')}`;
+            res.json({
+                issuer: baseUrl,
+                token_endpoint: `${baseUrl}/oauth/token`,
+                grant_types_supported: ['client_credentials'],
+                token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
+                response_types_supported: ['token'],
+                scopes_supported: ['mcp']
             });
         });
 
+        // OAuth Protected Resource Metadata
         app.get('/.well-known/oauth-protected-resource', (req, res) => {
             console.error('[OAuth] Protected resource metadata requested');
-            res.status(404).json({
-                error: 'not_supported',
-                error_description: 'This server does not support OAuth authentication'
+            const baseUrl = `https://${req.get('host')}`;
+            res.json({
+                resource: baseUrl,
+                authorization_servers: [baseUrl],
+                scopes_supported: ['mcp']
             });
         });
 
         app.get('/.well-known/oauth-protected-resource/mcp/sse', (req, res) => {
             console.error('[OAuth] Protected resource metadata for /mcp/sse requested');
-            res.status(404).json({
-                error: 'not_supported',
-                error_description: 'This server does not support OAuth authentication'
+            const baseUrl = `https://${req.get('host')}`;
+            res.json({
+                resource: `${baseUrl}/mcp/sse`,
+                authorization_servers: [baseUrl],
+                scopes_supported: ['mcp']
+            });
+        });
+
+        // OAuth Token Endpoint (Client Credentials Flow)
+        app.post('/oauth/token', (req, res) => {
+            console.error('[OAuth] Token request received');
+
+            const clientId = process.env.OAUTH_CLIENT_ID;
+            const clientSecret = process.env.OAUTH_CLIENT_SECRET;
+
+            if (!clientId || !clientSecret) {
+                console.error('[OAuth] OAuth not configured - missing OAUTH_CLIENT_ID or OAUTH_CLIENT_SECRET');
+                return res.status(500).json({
+                    error: 'server_error',
+                    error_description: 'OAuth not configured on server'
+                });
+            }
+
+            // Extract credentials from Authorization header (Basic Auth) or request body
+            let reqClientId, reqClientSecret;
+
+            const authHeader = req.headers.authorization;
+            if (authHeader && authHeader.startsWith('Basic ')) {
+                const credentials = Buffer.from(authHeader.substring(6), 'base64').toString();
+                [reqClientId, reqClientSecret] = credentials.split(':');
+            } else {
+                reqClientId = req.body?.client_id;
+                reqClientSecret = req.body?.client_secret;
+            }
+
+            // Validate credentials
+            if (reqClientId !== clientId || reqClientSecret !== clientSecret) {
+                console.error('[OAuth] Invalid client credentials');
+                return res.status(401).json({
+                    error: 'invalid_client',
+                    error_description: 'Invalid client credentials'
+                });
+            }
+
+            // Validate grant type
+            if (req.body?.grant_type !== 'client_credentials') {
+                console.error('[OAuth] Unsupported grant type:', req.body?.grant_type);
+                return res.status(400).json({
+                    error: 'unsupported_grant_type',
+                    error_description: 'Only client_credentials grant type is supported'
+                });
+            }
+
+            // Generate access token (simplified - in production use JWT)
+            const accessToken = Buffer.from(`${clientId}:${Date.now()}:${Math.random()}`).toString('base64');
+
+            // Store token (in-memory for now - use Redis/DB in production)
+            if (!this.validTokens) this.validTokens = new Set();
+            this.validTokens.add(accessToken);
+
+            console.error('[OAuth] Access token generated successfully');
+
+            res.json({
+                access_token: accessToken,
+                token_type: 'Bearer',
+                expires_in: 3600,
+                scope: 'mcp'
             });
         });
 
         // Dynamic client registration endpoint (not supported)
         app.post('/register', (req, res) => {
-            console.error('[OAuth] Client registration attempted');
+            console.error('[OAuth] Client registration attempted - not supported');
             res.status(404).json({
-                error: 'not_supported',
-                error_description: 'This server does not support dynamic client registration'
+                error: 'unsupported_operation',
+                error_description: 'Dynamic client registration is not supported. Use static OAuth credentials.'
             });
         });
 
