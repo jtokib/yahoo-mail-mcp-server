@@ -477,11 +477,22 @@ class YahooMailMCPServer {
             maxAge: 86400  // Cache preflight for 24 hours
         }));
 
-        // Parse JSON for all routes EXCEPT /mcp/message (which needs raw body for SSE)
+        // Parse request bodies for different content types
+        // Skip /mcp/message which needs raw body for SSE
         app.use((req, res, next) => {
             if (req.path === '/mcp/message') {
-                next();
+                return next();
+            }
+
+            // OAuth token endpoint needs both JSON and URL-encoded support
+            if (req.path === '/oauth/token') {
+                // Parse both JSON and URL-encoded bodies
+                express.json()(req, res, (err) => {
+                    if (err) return next(err);
+                    express.urlencoded({ extended: true })(req, res, next);
+                });
             } else {
+                // All other endpoints just need JSON
                 express.json()(req, res, next);
             }
         });
@@ -654,6 +665,8 @@ class YahooMailMCPServer {
         // OAuth Token Endpoint (supports both Authorization Code and Client Credentials flows)
         app.post('/oauth/token', async (req, res) => {
             console.error('[OAuth] Token request received');
+            console.error('[OAuth] Content-Type:', req.headers['content-type']);
+            console.error('[OAuth] Body keys:', req.body ? Object.keys(req.body).join(', ') : 'NO BODY');
             console.error('[OAuth] Grant type:', req.body?.grant_type);
 
             const clientId = process.env.OAUTH_CLIENT_ID;
