@@ -514,6 +514,50 @@ class YahooMailMCPServer {
             next();
         });
 
+        // OAuth discovery endpoints for MCP (authless server)
+        // These endpoints are queried by Claude Desktop to discover OAuth capabilities
+
+        app.get('/.well-known/oauth-authorization-server', (req, res) => {
+            console.error('[OAuth] Authorization server metadata requested');
+            res.status(404).json({
+                error: 'not_supported',
+                error_description: 'This server does not support OAuth authentication'
+            });
+        });
+
+        app.get('/.well-known/oauth-authorization-server/mcp/sse', (req, res) => {
+            console.error('[OAuth] Authorization server metadata for /mcp/sse requested');
+            res.status(404).json({
+                error: 'not_supported',
+                error_description: 'This server does not support OAuth authentication'
+            });
+        });
+
+        app.get('/.well-known/oauth-protected-resource', (req, res) => {
+            console.error('[OAuth] Protected resource metadata requested');
+            res.status(404).json({
+                error: 'not_supported',
+                error_description: 'This server does not support OAuth authentication'
+            });
+        });
+
+        app.get('/.well-known/oauth-protected-resource/mcp/sse', (req, res) => {
+            console.error('[OAuth] Protected resource metadata for /mcp/sse requested');
+            res.status(404).json({
+                error: 'not_supported',
+                error_description: 'This server does not support OAuth authentication'
+            });
+        });
+
+        // Dynamic client registration endpoint (not supported)
+        app.post('/register', (req, res) => {
+            console.error('[OAuth] Client registration attempted');
+            res.status(404).json({
+                error: 'not_supported',
+                error_description: 'This server does not support dynamic client registration'
+            });
+        });
+
         // Health check endpoint (enhanced with environment info)
         app.get('/health', (req, res) => {
             res.json({
