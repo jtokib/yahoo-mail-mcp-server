@@ -48,6 +48,10 @@ class YahooMailMCPServer {
         // In production, use Redis or a database with TTL
         this.validTokens = new Set();
 
+        // Store authorization codes for OAuth authorization code flow
+        // In production, use Redis with short TTL (60 seconds)
+        this.authCodes = new Map();
+
         this.setupToolHandlers();
         this.setupErrorHandling();
     }
@@ -582,11 +586,13 @@ class YahooMailMCPServer {
             const baseUrl = `https://${req.get('host')}`;
             res.json({
                 issuer: baseUrl,
+                authorization_endpoint: `${baseUrl}/oauth/authorize`,
                 token_endpoint: `${baseUrl}/oauth/token`,
-                grant_types_supported: ['client_credentials'],
+                grant_types_supported: ['authorization_code', 'client_credentials'],
+                response_types_supported: ['code'],
                 token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
-                scopes_supported: ['mcp'],
-                response_types_supported: []
+                code_challenge_methods_supported: ['S256'],
+                scopes_supported: ['mcp']
             });
         });
 
@@ -596,11 +602,13 @@ class YahooMailMCPServer {
             const baseUrl = `https://${req.get('host')}`;
             res.json({
                 issuer: baseUrl,
+                authorization_endpoint: `${baseUrl}/oauth/authorize`,
                 token_endpoint: `${baseUrl}/oauth/token`,
-                grant_types_supported: ['client_credentials'],
+                grant_types_supported: ['authorization_code', 'client_credentials'],
+                response_types_supported: ['code'],
                 token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
-                scopes_supported: ['mcp'],
-                response_types_supported: []
+                code_challenge_methods_supported: ['S256'],
+                scopes_supported: ['mcp']
             });
         });
 
@@ -638,7 +646,65 @@ class YahooMailMCPServer {
             });
         });
 
-        // OAuth Token Endpoint (Client Credentials Flow)
+        // OAuth Authorization Endpoint (Authorization Code Flow)
+        app.get('/oauth/authorize', (req, res) => {
+            console.error('[OAuth] Authorization request received');
+            console.error('[OAuth] Query params:', JSON.stringify(req.query).substring(0, 200));
+
+            const clientId = process.env.OAUTH_CLIENT_ID;
+            const {
+                response_type,
+                client_id,
+                redirect_uri,
+                state,
+                code_challenge,
+                code_challenge_method,
+                scope
+            } = req.query;
+
+            // Validate client_id
+            if (client_id !== clientId) {
+                console.error('[OAuth] Invalid client_id in authorize request');
+                return res.status(400).send('Invalid client_id');
+            }
+
+            // Validate response_type
+            if (response_type !== 'code') {
+                console.error('[OAuth] Unsupported response_type:', response_type);
+                return res.status(400).send('Unsupported response_type');
+            }
+
+            // Validate redirect_uri (must be Claude's callback)
+            if (!redirect_uri || (!redirect_uri.includes('claude.ai') && !redirect_uri.includes('claude.com') && !redirect_uri.includes('localhost'))) {
+                console.error('[OAuth] Invalid redirect_uri:', redirect_uri);
+                return res.status(400).send('Invalid redirect_uri');
+            }
+
+            // Generate authorization code
+            const authCode = Buffer.from(`${client_id}:${Date.now()}:${Math.random()}`).toString('base64');
+
+            // Store auth code with PKCE challenge (in-memory - use Redis/DB in production)
+            if (!this.authCodes) this.authCodes = new Map();
+            this.authCodes.set(authCode, {
+                client_id,
+                redirect_uri,
+                code_challenge,
+                code_challenge_method,
+                scope,
+                created_at: Date.now()
+            });
+
+            console.error('[OAuth] Authorization code generated, redirecting to:', redirect_uri);
+
+            // Redirect back to Claude with authorization code
+            const redirectUrl = new URL(redirect_uri);
+            redirectUrl.searchParams.append('code', authCode);
+            if (state) redirectUrl.searchParams.append('state', state);
+
+            res.redirect(redirectUrl.toString());
+        });
+
+        // OAuth Token Endpoint (supports both Authorization Code and Client Credentials flows)
         app.post('/oauth/token', (req, res) => {
             console.error('[OAuth] Token request received');
 
@@ -674,29 +740,76 @@ class YahooMailMCPServer {
                 });
             }
 
-            // Validate grant type
-            if (req.body?.grant_type !== 'client_credentials') {
-                console.error('[OAuth] Unsupported grant type:', req.body?.grant_type);
-                return res.status(400).json({
-                    error: 'unsupported_grant_type',
-                    error_description: 'Only client_credentials grant type is supported'
+            const grantType = req.body?.grant_type;
+
+            // Handle Authorization Code Grant (with PKCE)
+            if (grantType === 'authorization_code') {
+                const { code, redirect_uri, code_verifier } = req.body;
+
+                console.error('[OAuth] Authorization code grant - validating code');
+
+                // Validate authorization code
+                if (!this.authCodes || !this.authCodes.has(code)) {
+                    console.error('[OAuth] Invalid or expired authorization code');
+                    return res.status(400).json({
+                        error: 'invalid_grant',
+                        error_description: 'Invalid or expired authorization code'
+                    });
+                }
+
+                const authData = this.authCodes.get(code);
+
+                // Validate PKCE code verifier
+                if (authData.code_challenge) {
+                    const crypto = await import('crypto');
+                    const hash = crypto.createHash('sha256').update(code_verifier).digest('base64url');
+                    if (hash !== authData.code_challenge) {
+                        console.error('[OAuth] PKCE validation failed');
+                        return res.status(400).json({
+                            error: 'invalid_grant',
+                            error_description: 'PKCE validation failed'
+                        });
+                    }
+                }
+
+                // Delete used auth code (one-time use)
+                this.authCodes.delete(code);
+
+                // Generate access token
+                const accessToken = Buffer.from(`${reqClientId}:${Date.now()}:${Math.random()}`).toString('base64');
+                this.validTokens.add(accessToken);
+
+                console.error('[OAuth] Access token generated from authorization code');
+
+                return res.json({
+                    access_token: accessToken,
+                    token_type: 'Bearer',
+                    expires_in: 3600,
+                    scope: authData.scope || 'mcp'
                 });
             }
 
-            // Generate access token (simplified - in production use JWT)
-            const accessToken = Buffer.from(`${clientId}:${Date.now()}:${Math.random()}`).toString('base64');
+            // Handle Client Credentials Grant
+            if (grantType === 'client_credentials') {
+                // Generate access token
+                const accessToken = Buffer.from(`${clientId}:${Date.now()}:${Math.random()}`).toString('base64');
+                this.validTokens.add(accessToken);
 
-            // Store token (in-memory for now - use Redis/DB in production)
-            if (!this.validTokens) this.validTokens = new Set();
-            this.validTokens.add(accessToken);
+                console.error('[OAuth] Access token generated via client credentials');
 
-            console.error('[OAuth] Access token generated successfully');
+                return res.json({
+                    access_token: accessToken,
+                    token_type: 'Bearer',
+                    expires_in: 3600,
+                    scope: 'mcp'
+                });
+            }
 
-            res.json({
-                access_token: accessToken,
-                token_type: 'Bearer',
-                expires_in: 3600,
-                scope: 'mcp'
+            // Unsupported grant type
+            console.error('[OAuth] Unsupported grant type:', grantType);
+            res.status(400).json({
+                error: 'unsupported_grant_type',
+                error_description: 'Supported grant types: authorization_code, client_credentials'
             });
         });
 
