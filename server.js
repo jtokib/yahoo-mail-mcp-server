@@ -13,6 +13,10 @@ import Imap from 'imap';
 import { simpleParser } from 'mailparser';
 import express from 'express';
 import cors from 'cors';
+import dotenv from 'dotenv';
+
+// Load environment variables from .env file (for local development)
+dotenv.config();
 
 class YahooMailMCPServer {
     constructor() {
@@ -167,6 +171,19 @@ class YahooMailMCPServer {
      */
     async createImapConnection() {
         return new Promise((resolve, reject) => {
+            // Log environment check (without exposing credentials)
+            console.error('[IMAP] Attempting connection...');
+            console.error('[IMAP] Email configured:', !!process.env.YAHOO_EMAIL);
+            console.error('[IMAP] Password configured:', !!process.env.YAHOO_APP_PASSWORD);
+            console.error('[IMAP] Email value:', process.env.YAHOO_EMAIL ? process.env.YAHOO_EMAIL.substring(0, 3) + '***' : 'undefined');
+
+            if (!process.env.YAHOO_EMAIL || !process.env.YAHOO_APP_PASSWORD) {
+                const error = new Error('YAHOO_EMAIL or YAHOO_APP_PASSWORD environment variables are not set');
+                console.error('[IMAP] Configuration error:', error.message);
+                reject(error);
+                return;
+            }
+
             const imap = new Imap({
                 user: process.env.YAHOO_EMAIL,
                 password: process.env.YAHOO_APP_PASSWORD,
@@ -176,19 +193,29 @@ class YahooMailMCPServer {
                 authTimeout: 30000,
                 connTimeout: 30000,
                 tlsOptions: {
-                    rejectUnauthorized: false,
-                    servername: 'imap.mail.yahoo.com'
-                }
+                    rejectUnauthorized: true,  // Changed to true for production
+                    servername: 'imap.mail.yahoo.com',
+                    minVersion: 'TLSv1.2'
+                },
+                debug: console.error  // Enable IMAP debug logging
             });
 
             imap.once('ready', () => {
+                console.error('[IMAP] Connection successful');
                 resolve(imap);
             });
 
             imap.once('error', (err) => {
+                console.error('[IMAP] Connection error:', err.message);
+                console.error('[IMAP] Error details:', JSON.stringify(err, null, 2));
                 reject(err);
             });
 
+            imap.once('end', () => {
+                console.error('[IMAP] Connection ended');
+            });
+
+            console.error('[IMAP] Initiating connection to imap.mail.yahoo.com:993');
             imap.connect();
         });
     }
@@ -461,36 +488,87 @@ class YahooMailMCPServer {
         const app = express();
         const port = process.env.PORT || 3000;
 
-        // Enable CORS for Claude.ai
+        // Log startup configuration
+        console.error('[Server] Starting in SSE mode');
+        console.error('[Server] Port:', port);
+        console.error('[Server] Node version:', process.version);
+        console.error('[Server] Environment:', process.env.NODE_ENV || 'development');
+        console.error('[Server] Email configured:', !!process.env.YAHOO_EMAIL);
+        console.error('[Server] Password configured:', !!process.env.YAHOO_APP_PASSWORD);
+
+        // Enable CORS for Claude.ai and remote MCP connections
         app.use(cors({
-            origin: true,
-            credentials: true
+            origin: true,  // Allow all origins (Render's proxy may modify origin headers)
+            credentials: true,
+            methods: ['GET', 'POST', 'OPTIONS'],
+            allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
+            exposedHeaders: ['Content-Type'],
+            maxAge: 86400  // Cache preflight for 24 hours
         }));
 
         app.use(express.json());
 
-        // Health check endpoint
+        // Request logging middleware
+        app.use((req, res, next) => {
+            console.error(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+            next();
+        });
+
+        // Health check endpoint (enhanced with environment info)
         app.get('/health', (req, res) => {
             res.json({
                 status: 'ok',
                 service: 'yahoo-mail-mcp',
                 version: '1.0.0',
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
+                environment: {
+                    nodeVersion: process.version,
+                    platform: process.platform,
+                    emailConfigured: !!process.env.YAHOO_EMAIL,
+                    passwordConfigured: !!process.env.YAHOO_APP_PASSWORD,
+                    transportMode: process.env.TRANSPORT_MODE || 'stdio'
+                }
             });
         });
 
         // SSE endpoint for MCP
         app.get('/mcp/sse', async (req, res) => {
-            console.error('New SSE connection established');
-            const transport = new SSEServerTransport('/mcp/message', res);
-            await this.server.connect(transport);
+            try {
+                console.error('[SSE] New connection established from:', req.ip);
+                console.error('[SSE] Origin:', req.headers.origin);
+                console.error('[SSE] User-Agent:', req.headers['user-agent']);
+
+                // Set SSE-specific headers
+                res.setHeader('Content-Type', 'text/event-stream');
+                res.setHeader('Cache-Control', 'no-cache');
+                res.setHeader('Connection', 'keep-alive');
+
+                const transport = new SSEServerTransport('/mcp/message', res);
+                await this.server.connect(transport);
+                console.error('[SSE] MCP server connected to transport');
+            } catch (error) {
+                console.error('[SSE] Error connecting transport:', error);
+                if (!res.headersSent) {
+                    res.status(500).json({ error: error.message });
+                }
+            }
         });
 
         // Message endpoint for SSE
         app.post('/mcp/message', async (req, res) => {
-            console.error('Received message on /mcp/message');
+            console.error('[SSE] Received message on /mcp/message');
+            console.error('[SSE] Message body:', JSON.stringify(req.body).substring(0, 200));
             // The SSEServerTransport handles this internally
             res.status(200).end();
+        });
+
+        // Error handling middleware
+        app.use((err, req, res, next) => {
+            console.error('[Express] Error:', err);
+            res.status(500).json({
+                error: 'Internal server error',
+                message: err.message
+            });
         });
 
         // Root endpoint
