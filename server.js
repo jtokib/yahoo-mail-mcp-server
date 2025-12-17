@@ -71,16 +71,18 @@ class YahooMailMCPServer {
                     },
                     {
                         name: 'read_email',
-                        description: 'Read the content of a specific email by its sequence number',
+                        description: 'Read the content of specific emails by their sequence numbers',
                         inputSchema: {
                             type: 'object',
                             properties: {
-                                sequenceNumber: {
-                                    type: 'number',
-                                    description: 'The sequence number of the email to read'
+                                sequenceNumbers: {
+                                    type: 'array',
+                                    items: { type: 'number' },
+                                    description: 'Array of sequence numbers to read',
+                                    minItems: 1
                                 }
                             },
-                            required: ['sequenceNumber']
+                            required: ['sequenceNumbers']
                         }
                     },
                     {
@@ -101,6 +103,122 @@ class YahooMailMCPServer {
                             },
                             required: ['query']
                         }
+                    },
+                    {
+                        name: 'delete_emails',
+                        description: 'Move emails to Trash folder (soft delete, recoverable)',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                sequenceNumbers: {
+                                    type: 'array',
+                                    items: { type: 'number' },
+                                    description: 'Array of sequence numbers to delete',
+                                    minItems: 1
+                                }
+                            },
+                            required: ['sequenceNumbers']
+                        }
+                    },
+                    {
+                        name: 'archive_emails',
+                        description: 'Move emails to Archive folder for long-term storage',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                sequenceNumbers: {
+                                    type: 'array',
+                                    items: { type: 'number' },
+                                    description: 'Array of sequence numbers to archive',
+                                    minItems: 1
+                                }
+                            },
+                            required: ['sequenceNumbers']
+                        }
+                    },
+                    {
+                        name: 'mark_as_read',
+                        description: 'Mark emails as read',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                sequenceNumbers: {
+                                    type: 'array',
+                                    items: { type: 'number' },
+                                    description: 'Array of sequence numbers to mark as read',
+                                    minItems: 1
+                                }
+                            },
+                            required: ['sequenceNumbers']
+                        }
+                    },
+                    {
+                        name: 'mark_as_unread',
+                        description: 'Mark emails as unread',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                sequenceNumbers: {
+                                    type: 'array',
+                                    items: { type: 'number' },
+                                    description: 'Array of sequence numbers to mark as unread',
+                                    minItems: 1
+                                }
+                            },
+                            required: ['sequenceNumbers']
+                        }
+                    },
+                    {
+                        name: 'flag_emails',
+                        description: 'Flag emails as important/starred',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                sequenceNumbers: {
+                                    type: 'array',
+                                    items: { type: 'number' },
+                                    description: 'Array of sequence numbers to flag',
+                                    minItems: 1
+                                }
+                            },
+                            required: ['sequenceNumbers']
+                        }
+                    },
+                    {
+                        name: 'unflag_emails',
+                        description: 'Remove flag/star from emails',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                sequenceNumbers: {
+                                    type: 'array',
+                                    items: { type: 'number' },
+                                    description: 'Array of sequence numbers to unflag',
+                                    minItems: 1
+                                }
+                            },
+                            required: ['sequenceNumbers']
+                        }
+                    },
+                    {
+                        name: 'move_emails',
+                        description: 'Move emails to a specified folder',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                sequenceNumbers: {
+                                    type: 'array',
+                                    items: { type: 'number' },
+                                    description: 'Array of sequence numbers to move',
+                                    minItems: 1
+                                },
+                                folderName: {
+                                    type: 'string',
+                                    description: 'Name of the destination folder (e.g., "Work", "Personal")'
+                                }
+                            },
+                            required: ['sequenceNumbers', 'folderName']
+                        }
                     }
                 ]
             };
@@ -116,10 +234,31 @@ class YahooMailMCPServer {
                         return await this.listEmails(args?.count || 10);
 
                     case 'read_email':
-                        return await this.readEmail(args.sequenceNumber);
+                        return await this.readEmail(args.sequenceNumbers);
 
                     case 'search_emails':
                         return await this.searchEmails(args.query, args?.count || 10);
+
+                    case 'delete_emails':
+                        return await this.deleteEmails(args.sequenceNumbers);
+
+                    case 'archive_emails':
+                        return await this.archiveEmails(args.sequenceNumbers);
+
+                    case 'mark_as_read':
+                        return await this.markAsRead(args.sequenceNumbers);
+
+                    case 'mark_as_unread':
+                        return await this.markAsUnread(args.sequenceNumbers);
+
+                    case 'flag_emails':
+                        return await this.flagEmails(args.sequenceNumbers);
+
+                    case 'unflag_emails':
+                        return await this.unflagEmails(args.sequenceNumbers);
+
+                    case 'move_emails':
+                        return await this.moveEmails(args.sequenceNumbers, args.folderName);
 
                     default:
                         throw new Error(`Unknown tool: ${name}`);
@@ -181,6 +320,25 @@ class YahooMailMCPServer {
      * List recent emails
      */
     async listEmails(count = 10) {
+        // Validate count parameter
+        if (count < 1) {
+            return {
+                content: [{
+                    type: 'text',
+                    text: 'Error: count must be at least 1'
+                }]
+            };
+        }
+
+        if (count > 50) {
+            return {
+                content: [{
+                    type: 'text',
+                    text: 'Error: count cannot exceed 50 (use search or filters for larger results)'
+                }]
+            };
+        }
+
         const imap = await this.createImapConnection();
 
         return new Promise((resolve, reject) => {
@@ -263,67 +421,45 @@ class YahooMailMCPServer {
     }
 
     /**
-     * Read a specific email by sequence number
+     * Read specific emails by sequence numbers (supports batch reading)
      */
-    async readEmail(sequenceNumber) {
-        const imap = await this.createImapConnection();
+    async readEmail(sequenceNumbers) {
+        // Support both single number and array for backward compatibility
+        if (!Array.isArray(sequenceNumbers)) {
+            sequenceNumbers = [sequenceNumbers];
+        }
 
-        return new Promise((resolve, reject) => {
-            imap.openBox('INBOX', true, (err, box) => {
-                if (err) {
-                    reject(err);
-                    return;
-                }
-
-                const fetch = imap.seq.fetch(sequenceNumber, { bodies: '' });
-
-                fetch.on('message', (msg, seqno) => {
-                    let buffer = '';
-
-                    msg.on('body', (stream, info) => {
-                        stream.on('data', (chunk) => {
-                            buffer += chunk.toString('ascii');
-                        });
-                    });
-
-                    msg.once('end', () => {
-                        simpleParser(buffer, (err, parsed) => {
-                            if (err) {
-                                reject(err);
-                                return;
-                            }
-
-                            const emailContent =
-                                `📧 Email #${sequenceNumber}\n\n` +
-                                `From: ${parsed.from?.text || 'Unknown'}\n` +
-                                `To: ${parsed.to?.text || 'Unknown'}\n` +
-                                `Subject: ${parsed.subject || 'No Subject'}\n` +
-                                `Date: ${parsed.date || 'Unknown Date'}\n\n` +
-                                `--- Content ---\n` +
-                                `${parsed.text || parsed.html || 'No content available'}`;
-
-                            imap.end();
-                            resolve({
-                                content: [
-                                    {
-                                        type: 'text',
-                                        text: emailContent
-                                    }
-                                ]
-                            });
-                        });
-                    });
-                });
-
-                fetch.once('error', reject);
-            });
-        });
+        return this.readEmails(sequenceNumbers);
     }
 
     /**
      * Search emails by subject or sender
      */
     async searchEmails(query, count = 10) {
+        // Validate query parameter
+        if (!query || query.trim().length === 0) {
+            return {
+                content: [{
+                    type: 'text',
+                    text: 'Error: query cannot be empty'
+                }]
+            };
+        }
+
+        // Validate count parameter
+        if (count < 1) {
+            return {
+                content: [{
+                    type: 'text',
+                    text: 'Error: count must be at least 1'
+                }]
+            };
+        }
+
+        if (count > 50) {
+            count = 50;  // Cap at 50 instead of erroring
+        }
+
         const imap = await this.createImapConnection();
 
         return new Promise((resolve, reject) => {
@@ -411,6 +547,216 @@ class YahooMailMCPServer {
                 });
             });
         });
+    }
+
+    /**
+     * Helper method for batch email modification operations
+     */
+    async modifyEmails(sequenceNumbers, operation, operationName) {
+        const imap = await this.createImapConnection();
+
+        return new Promise((resolve, reject) => {
+            imap.openBox('INBOX', false, (err, box) => {  // false = read-write mode!
+                if (err) {
+                    imap.end();
+                    reject(err);
+                    return;
+                }
+
+                // Validate sequence numbers
+                const maxSeq = box.messages.total;
+                const invalid = sequenceNumbers.filter(n => n < 1 || n > maxSeq);
+                if (invalid.length > 0) {
+                    imap.end();
+                    reject(new Error(`Invalid sequence numbers: ${invalid.join(', ')}. Valid range: 1-${maxSeq}`));
+                    return;
+                }
+
+                const source = sequenceNumbers.join(',');
+
+                // Execute the operation
+                operation(imap, source, (err) => {
+                    imap.end();
+
+                    if (err) {
+                        reject(err);
+                        return;
+                    }
+
+                    resolve({
+                        content: [{
+                            type: 'text',
+                            text: `Successfully ${operationName} ${sequenceNumbers.length} email(s): ${sequenceNumbers.join(', ')}`
+                        }]
+                    });
+                });
+            });
+        });
+    }
+
+    /**
+     * Helper method for reading multiple emails
+     */
+    async readEmails(sequenceNumbers) {
+        const imap = await this.createImapConnection();
+
+        return new Promise((resolve, reject) => {
+            imap.openBox('INBOX', true, (err, box) => {  // true = read-only mode
+                if (err) {
+                    imap.end();
+                    reject(err);
+                    return;
+                }
+
+                // Validate sequence numbers
+                const maxSeq = box.messages.total;
+                const invalid = sequenceNumbers.filter(n => n < 1 || n > maxSeq);
+                if (invalid.length > 0) {
+                    imap.end();
+                    reject(new Error(`Invalid sequence numbers: ${invalid.join(', ')}. Valid range: 1-${maxSeq}`));
+                    return;
+                }
+
+                const source = sequenceNumbers.join(',');
+                const fetch = imap.seq.fetch(source, { bodies: '' });
+                const emails = [];
+
+                fetch.on('message', (msg, seqno) => {
+                    let buffer = '';
+
+                    msg.on('body', (stream, info) => {
+                        stream.on('data', (chunk) => {
+                            buffer += chunk.toString('ascii');
+                        });
+                    });
+
+                    msg.once('end', () => {
+                        simpleParser(buffer, (err, parsed) => {
+                            if (err) {
+                                console.error('Error parsing email:', err);
+                                return;
+                            }
+
+                            emails.push({
+                                sequenceNumber: seqno,
+                                from: parsed.from?.text || 'Unknown',
+                                to: parsed.to?.text || 'Unknown',
+                                subject: parsed.subject || 'No Subject',
+                                date: parsed.date || 'Unknown Date',
+                                content: parsed.text || parsed.html || 'No content available'
+                            });
+                        });
+                    });
+                });
+
+                fetch.once('error', (err) => {
+                    imap.end();
+                    reject(err);
+                });
+
+                fetch.once('end', () => {
+                    imap.end();
+
+                    // Sort by sequence number for consistent output
+                    emails.sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+
+                    // Format output
+                    const emailContent = emails.map(email =>
+                        `📧 Email #${email.sequenceNumber}\n\n` +
+                        `From: ${email.from}\n` +
+                        `To: ${email.to}\n` +
+                        `Subject: ${email.subject}\n` +
+                        `Date: ${email.date}\n\n` +
+                        `--- Content ---\n` +
+                        `${email.content}`
+                    ).join('\n\n' + '='.repeat(80) + '\n\n');
+
+                    resolve({
+                        content: [{
+                            type: 'text',
+                            text: emailContent
+                        }]
+                    });
+                });
+            });
+        });
+    }
+
+    /**
+     * Mark emails as read
+     */
+    async markAsRead(sequenceNumbers) {
+        return this.modifyEmails(
+            sequenceNumbers,
+            (imap, source, callback) => imap.seq.addFlags(source, '\\Seen', callback),
+            'marked as read'
+        );
+    }
+
+    /**
+     * Mark emails as unread
+     */
+    async markAsUnread(sequenceNumbers) {
+        return this.modifyEmails(
+            sequenceNumbers,
+            (imap, source, callback) => imap.seq.delFlags(source, '\\Seen', callback),
+            'marked as unread'
+        );
+    }
+
+    /**
+     * Flag emails as important/starred
+     */
+    async flagEmails(sequenceNumbers) {
+        return this.modifyEmails(
+            sequenceNumbers,
+            (imap, source, callback) => imap.seq.addFlags(source, '\\Flagged', callback),
+            'flagged'
+        );
+    }
+
+    /**
+     * Remove flag/star from emails
+     */
+    async unflagEmails(sequenceNumbers) {
+        return this.modifyEmails(
+            sequenceNumbers,
+            (imap, source, callback) => imap.seq.delFlags(source, '\\Flagged', callback),
+            'unflagged'
+        );
+    }
+
+    /**
+     * Delete emails (move to Trash)
+     */
+    async deleteEmails(sequenceNumbers) {
+        return this.modifyEmails(
+            sequenceNumbers,
+            (imap, source, callback) => imap.seq.move(source, 'Trash', callback),
+            'moved to Trash'
+        );
+    }
+
+    /**
+     * Archive emails
+     */
+    async archiveEmails(sequenceNumbers) {
+        return this.modifyEmails(
+            sequenceNumbers,
+            (imap, source, callback) => imap.seq.move(source, 'Archive', callback),
+            'archived'
+        );
+    }
+
+    /**
+     * Move emails to a specific folder
+     */
+    async moveEmails(sequenceNumbers, folderName) {
+        return this.modifyEmails(
+            sequenceNumbers,
+            (imap, source, callback) => imap.seq.move(source, folderName, callback),
+            `moved to ${folderName}`
+        );
     }
 
     setupErrorHandling() {
@@ -866,7 +1212,14 @@ class YahooMailMCPServer {
                 tools: [
                     'list_emails',
                     'read_email',
-                    'search_emails'
+                    'search_emails',
+                    'delete_emails',
+                    'archive_emails',
+                    'mark_as_read',
+                    'mark_as_unread',
+                    'flag_emails',
+                    'unflag_emails',
+                    'move_emails'
                 ]
             });
         });

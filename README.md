@@ -1,15 +1,23 @@
 # Yahoo Mail MCP Server
 
-A Model Context Protocol (MCP) server that provides read-only access to Yahoo Mail via IMAP. This server supports both local stdio transport (for Claude Desktop) and HTTP/SSE transport (for remote access via Claude.ai).
+A Model Context Protocol (MCP) server that provides full email management for Yahoo Mail via IMAP. This server supports both local stdio transport (for Claude Desktop) and HTTP/SSE transport (for remote access via Claude.ai).
 
 ## Features
 
 - **Secure OAuth 2.0 Authentication**: Protect your remote MCP server with OAuth 2.0 authorization code flow with PKCE
-- **Read-Only Access**: Safely browse your Yahoo Mail without modification capabilities
-- **Three Core Tools**:
+- **Full Email Management**: Complete email operations with batch processing support
+- **Ten Powerful Tools**:
   - `list_emails`: List recent emails from your inbox
-  - `read_email`: Read the full content of a specific email
+  - `read_email`: Read the full content of emails (batch support)
   - `search_emails`: Search emails by subject or sender
+  - `delete_emails`: Move emails to Trash (soft delete, recoverable)
+  - `archive_emails`: Archive emails for long-term storage
+  - `mark_as_read`: Mark emails as read
+  - `mark_as_unread`: Mark emails as unread
+  - `flag_emails`: Flag emails as important/starred
+  - `unflag_emails`: Remove flag from emails
+  - `move_emails`: Move emails to any folder
+- **Batch Operations**: All management operations support processing multiple emails at once
 - **Dual Transport Modes**:
   - `stdio`: For local Claude Desktop integration
   - `sse`: For remote access via HTTP/Server-Sent Events (required for Render.com)
@@ -525,11 +533,12 @@ yahoo-mail-mcp-server/
    - Revoke unused passwords regularly
    - App passwords can be revoked without changing your main password
 
-4. **Read-only access**
-   - Server only reads emails, never modifies
-   - No delete, send, or move operations
-   - Safe for production use
-   - Minimal permissions required
+4. **Email management operations**
+   - All modification operations are reversible (soft delete, not permanent)
+   - Deleted emails are moved to Trash folder (recoverable within 7 days for free accounts)
+   - Archive, flag, and read status changes are non-destructive
+   - Move operations preserve email content and metadata
+   - No send operations - server cannot send emails on your behalf
 
 5. **HTTPS in production**
    - Render.com provides free SSL certificates
@@ -637,14 +646,18 @@ list_emails with count 20
 
 ### read_email
 
-Read the full content of a specific email.
+Read the full content of emails (supports batch reading).
 
 **Parameters:**
-- `sequenceNumber` (required): The sequence number of the email
+- `sequenceNumbers` (required): Array of sequence numbers to read
 
-**Example:**
+**Examples:**
 ```
-read_email with sequenceNumber 5
+# Read a single email
+read_email with sequenceNumbers [5]
+
+# Read multiple emails
+read_email with sequenceNumbers [1, 2, 3]
 ```
 
 ### search_emails
@@ -658,6 +671,119 @@ Search emails by subject or sender.
 **Example:**
 ```
 search_emails with query "invoice" and count 15
+```
+
+### delete_emails
+
+Move emails to Trash folder (soft delete - emails can be recovered).
+
+**Parameters:**
+- `sequenceNumbers` (required): Array of sequence numbers to delete
+
+**Examples:**
+```
+# Delete a single email
+delete_emails with sequenceNumbers [5]
+
+# Delete multiple emails
+delete_emails with sequenceNumbers [1, 3, 5, 7]
+```
+
+### archive_emails
+
+Move emails to Archive folder for long-term storage.
+
+**Parameters:**
+- `sequenceNumbers` (required): Array of sequence numbers to archive
+
+**Examples:**
+```
+# Archive a single email
+archive_emails with sequenceNumbers [10]
+
+# Archive multiple emails
+archive_emails with sequenceNumbers [5, 6, 7, 8]
+```
+
+### mark_as_read
+
+Mark emails as read by adding the Seen flag.
+
+**Parameters:**
+- `sequenceNumbers` (required): Array of sequence numbers to mark as read
+
+**Examples:**
+```
+# Mark a single email as read
+mark_as_read with sequenceNumbers [5]
+
+# Mark multiple emails as read
+mark_as_read with sequenceNumbers [1, 2, 3, 4, 5]
+```
+
+### mark_as_unread
+
+Mark emails as unread by removing the Seen flag.
+
+**Parameters:**
+- `sequenceNumbers` (required): Array of sequence numbers to mark as unread
+
+**Examples:**
+```
+# Mark a single email as unread
+mark_as_unread with sequenceNumbers [5]
+
+# Mark multiple emails as unread
+mark_as_unread with sequenceNumbers [10, 11, 12]
+```
+
+### flag_emails
+
+Flag emails as important/starred by adding the Flagged flag.
+
+**Parameters:**
+- `sequenceNumbers` (required): Array of sequence numbers to flag
+
+**Examples:**
+```
+# Flag a single email
+flag_emails with sequenceNumbers [5]
+
+# Flag multiple emails
+flag_emails with sequenceNumbers [1, 5, 10]
+```
+
+### unflag_emails
+
+Remove flag/star from emails by removing the Flagged flag.
+
+**Parameters:**
+- `sequenceNumbers` (required): Array of sequence numbers to unflag
+
+**Examples:**
+```
+# Unflag a single email
+unflag_emails with sequenceNumbers [5]
+
+# Unflag multiple emails
+unflag_emails with sequenceNumbers [1, 2, 3]
+```
+
+### move_emails
+
+Move emails to a specified folder.
+
+**Parameters:**
+- `sequenceNumbers` (required): Array of sequence numbers to move
+- `folderName` (required): Name of the destination folder (e.g., "Work", "Personal", "Archive")
+
+**Examples:**
+```
+# Move a single email to Work folder
+move_emails with sequenceNumbers [5] and folderName "Work"
+
+# Move multiple emails to Personal folder
+move_emails with sequenceNumbers [10, 11, 12] and folderName "Personal"
 ```
 
 ## Performance Considerations
