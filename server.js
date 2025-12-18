@@ -23,7 +23,7 @@ class YahooMailMCPServer {
         this.server = new Server(
             {
                 name: 'yahoo-mail-mcp',
-                version: '2.0.1',
+                version: '3.0.0',
             },
             {
                 capabilities: {
@@ -57,7 +57,7 @@ class YahooMailMCPServer {
                 tools: [
                     {
                         name: 'list_emails',
-                        description: 'List recent emails from Yahoo Mail inbox',
+                        description: 'List recent emails from a Yahoo Mail folder. Returns UIDs (permanent identifiers) and enriched metadata including size, flags, and attachment status.',
                         inputSchema: {
                             type: 'object',
                             properties: {
@@ -65,159 +65,243 @@ class YahooMailMCPServer {
                                     type: 'number',
                                     description: 'Number of emails to retrieve (default: 10, max: 50)',
                                     default: 10
+                                },
+                                folder: {
+                                    type: 'string',
+                                    description: 'Folder to list emails from (default: INBOX). Use list_folders to see available folders.',
+                                    default: 'INBOX'
+                                },
+                                offset: {
+                                    type: 'number',
+                                    description: 'Number of emails to skip (for pagination, default: 0)',
+                                    default: 0
                                 }
                             }
                         }
                     },
                     {
                         name: 'read_email',
-                        description: 'Read the content of specific emails by their sequence numbers',
+                        description: 'Read email content using UIDs (permanent identifiers). UIDs don\'t change when emails are deleted. Get UIDs from list_emails or search_emails.',
                         inputSchema: {
                             type: 'object',
                             properties: {
-                                sequenceNumbers: {
+                                uids: {
                                     type: 'array',
                                     items: { type: 'number' },
-                                    description: 'Array of sequence numbers to read',
+                                    description: 'Array of UIDs to read. UIDs are permanent identifiers from list_emails.',
                                     minItems: 1
+                                },
+                                folder: {
+                                    type: 'string',
+                                    description: 'Folder containing the emails (default: INBOX)',
+                                    default: 'INBOX'
                                 }
                             },
-                            required: ['sequenceNumbers']
+                            required: ['uids']
                         }
                     },
                     {
                         name: 'search_emails',
-                        description: 'Search emails by subject or sender',
+                        description: 'Search emails using UIDs with advanced filters. Returns UIDs which are permanent identifiers that don\'t change when emails are deleted. Get UIDs from results for subsequent operations.',
                         inputSchema: {
                             type: 'object',
                             properties: {
                                 query: {
                                     type: 'string',
-                                    description: 'Search term for subject or sender'
+                                    description: 'Search term for subject or sender (can be empty for date-only searches)',
+                                    default: ''
                                 },
                                 count: {
                                     type: 'number',
-                                    description: 'Number of results to return (default: 10)',
+                                    description: 'Number of results to return (default: 10, max: 50)',
                                     default: 10
+                                },
+                                dateFrom: {
+                                    type: 'string',
+                                    description: 'Filter emails from this date onwards (ISO 8601 or RFC 2822 format)',
+                                    default: null
+                                },
+                                dateTo: {
+                                    type: 'string',
+                                    description: 'Filter emails up to this date (ISO 8601 or RFC 2822 format)',
+                                    default: null
+                                },
+                                sender: {
+                                    type: 'string',
+                                    description: 'Filter by specific sender email address or name',
+                                    default: null
+                                },
+                                unreadOnly: {
+                                    type: 'boolean',
+                                    description: 'Only return unread emails (default: false)',
+                                    default: false
+                                },
+                                folder: {
+                                    type: 'string',
+                                    description: 'Folder to search in (default: INBOX). Use list_folders to see available folders.',
+                                    default: 'INBOX'
                                 }
                             },
-                            required: ['query']
+                            required: []
                         }
                     },
                     {
                         name: 'delete_emails',
-                        description: 'Move emails to Trash folder (soft delete, recoverable)',
+                        description: 'Move emails to Trash folder using UIDs (soft delete, recoverable). UIDs are permanent identifiers.',
                         inputSchema: {
                             type: 'object',
                             properties: {
-                                sequenceNumbers: {
+                                uids: {
                                     type: 'array',
                                     items: { type: 'number' },
-                                    description: 'Array of sequence numbers to delete',
+                                    description: 'Array of UIDs to delete',
                                     minItems: 1
+                                },
+                                folder: {
+                                    type: 'string',
+                                    description: 'Source folder (default: INBOX)',
+                                    default: 'INBOX'
                                 }
                             },
-                            required: ['sequenceNumbers']
+                            required: ['uids']
                         }
                     },
                     {
                         name: 'archive_emails',
-                        description: 'Move emails to Archive folder for long-term storage',
+                        description: 'Move emails to Archive folder using UIDs for long-term storage. UIDs are permanent identifiers.',
                         inputSchema: {
                             type: 'object',
                             properties: {
-                                sequenceNumbers: {
+                                uids: {
                                     type: 'array',
                                     items: { type: 'number' },
-                                    description: 'Array of sequence numbers to archive',
+                                    description: 'Array of UIDs to archive',
                                     minItems: 1
+                                },
+                                folder: {
+                                    type: 'string',
+                                    description: 'Source folder (default: INBOX)',
+                                    default: 'INBOX'
                                 }
                             },
-                            required: ['sequenceNumbers']
+                            required: ['uids']
                         }
                     },
                     {
                         name: 'mark_as_read',
-                        description: 'Mark emails as read',
+                        description: 'Mark emails as read using UIDs. UIDs are permanent identifiers.',
                         inputSchema: {
                             type: 'object',
                             properties: {
-                                sequenceNumbers: {
+                                uids: {
                                     type: 'array',
                                     items: { type: 'number' },
-                                    description: 'Array of sequence numbers to mark as read',
+                                    description: 'Array of UIDs to mark as read',
                                     minItems: 1
+                                },
+                                folder: {
+                                    type: 'string',
+                                    description: 'Folder containing emails (default: INBOX)',
+                                    default: 'INBOX'
                                 }
                             },
-                            required: ['sequenceNumbers']
+                            required: ['uids']
                         }
                     },
                     {
                         name: 'mark_as_unread',
-                        description: 'Mark emails as unread',
+                        description: 'Mark emails as unread using UIDs. UIDs are permanent identifiers.',
                         inputSchema: {
                             type: 'object',
                             properties: {
-                                sequenceNumbers: {
+                                uids: {
                                     type: 'array',
                                     items: { type: 'number' },
-                                    description: 'Array of sequence numbers to mark as unread',
+                                    description: 'Array of UIDs to mark as unread',
                                     minItems: 1
+                                },
+                                folder: {
+                                    type: 'string',
+                                    description: 'Folder containing emails (default: INBOX)',
+                                    default: 'INBOX'
                                 }
                             },
-                            required: ['sequenceNumbers']
+                            required: ['uids']
                         }
                     },
                     {
                         name: 'flag_emails',
-                        description: 'Flag emails as important/starred',
+                        description: 'Flag emails as important/starred using UIDs. UIDs are permanent identifiers.',
                         inputSchema: {
                             type: 'object',
                             properties: {
-                                sequenceNumbers: {
+                                uids: {
                                     type: 'array',
                                     items: { type: 'number' },
-                                    description: 'Array of sequence numbers to flag',
+                                    description: 'Array of UIDs to flag',
                                     minItems: 1
+                                },
+                                folder: {
+                                    type: 'string',
+                                    description: 'Folder containing emails (default: INBOX)',
+                                    default: 'INBOX'
                                 }
                             },
-                            required: ['sequenceNumbers']
+                            required: ['uids']
                         }
                     },
                     {
                         name: 'unflag_emails',
-                        description: 'Remove flag/star from emails',
+                        description: 'Remove flag/star from emails using UIDs. UIDs are permanent identifiers.',
                         inputSchema: {
                             type: 'object',
                             properties: {
-                                sequenceNumbers: {
+                                uids: {
                                     type: 'array',
                                     items: { type: 'number' },
-                                    description: 'Array of sequence numbers to unflag',
+                                    description: 'Array of UIDs to unflag',
                                     minItems: 1
+                                },
+                                folder: {
+                                    type: 'string',
+                                    description: 'Folder containing emails (default: INBOX)',
+                                    default: 'INBOX'
                                 }
                             },
-                            required: ['sequenceNumbers']
+                            required: ['uids']
                         }
                     },
                     {
                         name: 'move_emails',
-                        description: 'Move emails to a specified folder',
+                        description: 'Move emails to a specified folder using UIDs. UIDs are permanent identifiers. Use list_folders to see available folders.',
                         inputSchema: {
                             type: 'object',
                             properties: {
-                                sequenceNumbers: {
+                                uids: {
                                     type: 'array',
                                     items: { type: 'number' },
-                                    description: 'Array of sequence numbers to move',
+                                    description: 'Array of UIDs to move',
                                     minItems: 1
                                 },
                                 folderName: {
                                     type: 'string',
-                                    description: 'Name of the destination folder (e.g., "Work", "Personal")'
+                                    description: 'Name of the destination folder (e.g., "Work", "Personal"). Use list_folders to see available folders.'
+                                },
+                                sourceFolder: {
+                                    type: 'string',
+                                    description: 'Source folder containing the emails (default: INBOX)',
+                                    default: 'INBOX'
                                 }
                             },
-                            required: ['sequenceNumbers', 'folderName']
+                            required: ['uids', 'folderName']
+                        }
+                    },
+                    {
+                        name: 'list_folders',
+                        description: 'List all available IMAP folders/mailboxes in your Yahoo Mail account',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {}
                         }
                     }
                 ]
@@ -231,34 +315,44 @@ class YahooMailMCPServer {
             try {
                 switch (name) {
                     case 'list_emails':
-                        return await this.listEmails(args?.count || 10);
+                        return await this.listEmails(args?.count || 10, args?.folder || 'INBOX', args?.offset || 0);
 
                     case 'read_email':
-                        return await this.readEmail(args.sequenceNumbers);
+                        return await this.readEmail(args.uids, args.folder);
 
                     case 'search_emails':
-                        return await this.searchEmails(args.query, args?.count || 10);
+                        return await this.searchEmails(args?.query || '', {
+                            count: args?.count || 10,
+                            dateFrom: args?.dateFrom || null,
+                            dateTo: args?.dateTo || null,
+                            sender: args?.sender || null,
+                            unreadOnly: args?.unreadOnly || false,
+                            folder: args?.folder || 'INBOX'
+                        });
 
                     case 'delete_emails':
-                        return await this.deleteEmails(args.sequenceNumbers);
+                        return await this.deleteEmails(args.uids, args.folder);
 
                     case 'archive_emails':
-                        return await this.archiveEmails(args.sequenceNumbers);
+                        return await this.archiveEmails(args.uids, args.folder);
 
                     case 'mark_as_read':
-                        return await this.markAsRead(args.sequenceNumbers);
+                        return await this.markAsRead(args.uids, args.folder);
 
                     case 'mark_as_unread':
-                        return await this.markAsUnread(args.sequenceNumbers);
+                        return await this.markAsUnread(args.uids, args.folder);
 
                     case 'flag_emails':
-                        return await this.flagEmails(args.sequenceNumbers);
+                        return await this.flagEmails(args.uids, args.folder);
 
                     case 'unflag_emails':
-                        return await this.unflagEmails(args.sequenceNumbers);
+                        return await this.unflagEmails(args.uids, args.folder);
 
                     case 'move_emails':
-                        return await this.moveEmails(args.sequenceNumbers, args.folderName);
+                        return await this.moveEmails(args.uids, args.folderName, args.sourceFolder);
+
+                    case 'list_folders':
+                        return await this.listFolders();
 
                     default:
                         throw new Error(`Unknown tool: ${name}`);
@@ -303,13 +397,45 @@ class YahooMailMCPServer {
                 }
             });
 
+            // Add connection timeout handler (35 seconds)
+            const connectionTimeout = setTimeout(() => {
+                console.error('[IMAP] Connection timeout after 35 seconds');
+                imap.end();
+                reject(new Error('Connection timed out. Service may have been sleeping (Render spindown). Please try again.'));
+            }, 35000);
+
             imap.once('ready', () => {
+                clearTimeout(connectionTimeout);
                 resolve(imap);
             });
 
             imap.once('error', (err) => {
+                clearTimeout(connectionTimeout);
                 console.error('[IMAP] Connection error:', err.message);
-                reject(err);
+
+                // Provide enhanced error messages based on error type
+                let errorMessage = err.message;
+
+                // Authentication errors
+                if (err.message.includes('Invalid credentials') ||
+                    err.message.includes('authentication failed') ||
+                    err.message.includes('AUTHENTICATIONFAILED')) {
+                    errorMessage = `Authentication failed: ${err.message}. Please check Yahoo Mail app password. Regenerate at https://login.yahoo.com/account/security`;
+                }
+                // Network/connection errors
+                else if (err.message.includes('ENOTFOUND') ||
+                         err.message.includes('ECONNREFUSED') ||
+                         err.message.includes('ETIMEDOUT') ||
+                         err.message.includes('getaddrinfo')) {
+                    errorMessage = `Cannot connect to Yahoo Mail servers: ${err.message}. Check internet connection.`;
+                }
+                // Timeout errors
+                else if (err.message.includes('Timed out') ||
+                         err.message.includes('timeout')) {
+                    errorMessage = `Connection timed out: ${err.message}. Service may have been sleeping (Render spindown). Please try again.`;
+                }
+
+                reject(new Error(errorMessage));
             });
 
             imap.connect();
@@ -317,9 +443,9 @@ class YahooMailMCPServer {
     }
 
     /**
-     * List recent emails
+     * List recent emails with enriched metadata
      */
-    async listEmails(count = 10) {
+    async listEmails(count = 10, folder = 'INBOX', offset = 0) {
         // Validate count parameter
         if (count < 1) {
             return {
@@ -339,34 +465,70 @@ class YahooMailMCPServer {
             };
         }
 
+        // Validate offset
+        if (offset < 0) {
+            return {
+                content: [{
+                    type: 'text',
+                    text: 'Error: offset must be non-negative'
+                }]
+            };
+        }
+
         const imap = await this.createImapConnection();
 
         return new Promise((resolve, reject) => {
-            imap.openBox('INBOX', true, (err, box) => {
+            imap.openBox(folder, true, (err, box) => {
                 if (err) {
-                    reject(err);
+                    imap.end();
+                    reject(new Error(`Failed to open folder "${folder}": ${err.message}`));
                     return;
                 }
 
-                // Get the most recent emails
                 const total = box.messages.total;
-                const start = Math.max(1, total - count + 1);
-                const end = total;
 
                 if (total === 0) {
                     imap.end();
                     resolve({
-                        content: [
-                            {
-                                type: 'text',
-                                text: `📧 No emails found in your inbox`
-                            }
-                        ]
+                        content: [{
+                            type: 'text',
+                            text: JSON.stringify({
+                                emails: [],
+                                totalCount: 0,
+                                offset: 0,
+                                limit: count,
+                                folder: folder
+                            }, null, 2)
+                        }]
                     });
                     return;
                 }
 
-                const fetch = imap.seq.fetch(`${start}:${end}`, {
+                // Calculate range with offset
+                // If total=100, offset=10, count=10: fetch messages 81-90 (reversed for newest first)
+                const startSeq = Math.max(1, total - offset - count + 1);
+                const endSeq = Math.max(1, total - offset);
+
+                if (startSeq > endSeq) {
+                    imap.end();
+                    resolve({
+                        content: [{
+                            type: 'text',
+                            text: JSON.stringify({
+                                emails: [],
+                                totalCount: total,
+                                offset: offset,
+                                limit: count,
+                                folder: folder,
+                                message: 'Offset exceeds available messages'
+                            }, null, 2)
+                        }]
+                    });
+                    return;
+                }
+
+                // Fetch with struct for attachments and size
+                const fetch = imap.seq.fetch(`${startSeq}:${endSeq}`, {
                     bodies: 'HEADER.FIELDS (FROM TO SUBJECT DATE)',
                     struct: true
                 });
@@ -375,6 +537,7 @@ class YahooMailMCPServer {
 
                 fetch.on('message', (msg, seqno) => {
                     let header = '';
+                    let attrs = null;
 
                     msg.on('body', (stream, info) => {
                         stream.on('data', (chunk) => {
@@ -382,18 +545,30 @@ class YahooMailMCPServer {
                         });
                     });
 
+                    msg.once('attributes', (attributes) => {
+                        attrs = attributes;
+                    });
+
                     msg.once('end', () => {
                         const parsed = Imap.parseHeader(header);
+
                         emails.push({
-                            sequenceNumber: seqno,
+                            uid: attrs.uid,                          // NEW: Permanent UID
+                            sequenceNumber: seqno,                   // Legacy reference
                             from: parsed.from?.[0] || 'Unknown',
                             subject: parsed.subject?.[0] || 'No Subject',
-                            date: parsed.date?.[0] || 'Unknown Date'
+                            date: parsed.date?.[0] || 'Unknown Date',
+                            size: attrs.size || 0,                   // NEW: Message size in bytes
+                            flags: attrs.flags || [],                // NEW: IMAP flags
+                            hasAttachments: this.hasAttachments(attrs.struct) // NEW
                         });
                     });
                 });
 
-                fetch.once('error', reject);
+                fetch.once('error', (err) => {
+                    imap.end();
+                    reject(err);
+                });
 
                 fetch.once('end', () => {
                     imap.end();
@@ -401,19 +576,17 @@ class YahooMailMCPServer {
                     // Sort by sequence number (newest first)
                     emails.sort((a, b) => b.sequenceNumber - a.sequenceNumber);
 
-                    const emailList = emails.map(email =>
-                        `📧 [${email.sequenceNumber}] From: ${email.from}\n` +
-                        `   Subject: ${email.subject}\n` +
-                        `   Date: ${email.date}\n`
-                    ).join('\n');
-
                     resolve({
-                        content: [
-                            {
-                                type: 'text',
-                                text: `📧 Recent ${emails.length} emails from your Yahoo Mail inbox:\n\n${emailList}\n\nUse read_email with a sequence number to read the full content.`
-                            }
-                        ]
+                        content: [{
+                            type: 'text',
+                            text: JSON.stringify({
+                                emails: emails,
+                                totalCount: total,
+                                offset: offset,
+                                limit: count,
+                                folder: folder
+                            }, null, 2)
+                        }]
                     });
                 });
             });
@@ -421,27 +594,36 @@ class YahooMailMCPServer {
     }
 
     /**
-     * Read specific emails by sequence numbers (supports batch reading)
+     * Read specific emails by UIDs (supports batch reading)
      */
-    async readEmail(sequenceNumbers) {
+    async readEmail(uids, folder = 'INBOX') {
         // Support both single number and array for backward compatibility
-        if (!Array.isArray(sequenceNumbers)) {
-            sequenceNumbers = [sequenceNumbers];
+        if (!Array.isArray(uids)) {
+            uids = [uids];
         }
 
-        return this.readEmails(sequenceNumbers);
+        return this.readEmails(uids, folder);
     }
 
     /**
-     * Search emails by subject or sender
+     * Search emails with advanced filters
      */
-    async searchEmails(query, count = 10) {
-        // Validate query parameter
-        if (!query || query.trim().length === 0) {
+    async searchEmails(query, options = {}) {
+        const {
+            count = 10,
+            dateFrom = null,
+            dateTo = null,
+            sender = null,
+            unreadOnly = false,
+            folder = 'INBOX'
+        } = options;
+
+        // Validate query parameter (allow empty for date-only searches)
+        if (query === undefined || query === null) {
             return {
                 content: [{
                     type: 'text',
-                    text: 'Error: query cannot be empty'
+                    text: 'Error: query is required (use empty string "" for searches without text criteria)'
                 }]
             };
         }
@@ -456,27 +638,74 @@ class YahooMailMCPServer {
             };
         }
 
-        if (count > 50) {
-            count = 50;  // Cap at 50 instead of erroring
-        }
-
         const imap = await this.createImapConnection();
 
         return new Promise((resolve, reject) => {
-            imap.openBox('INBOX', true, (err, box) => {
+            imap.openBox(folder, true, (err, box) => {
                 if (err) {
-                    reject(err);
+                    imap.end();
+                    reject(new Error(`Failed to open folder "${folder}": ${err.message}`));
                     return;
                 }
 
-                // Search for emails with query in subject or from field
-                imap.search([
-                    ['OR',
+                // Build search criteria
+                const criteria = [];
+
+                // Text search (subject or from)
+                if (query && query.trim().length > 0) {
+                    criteria.push([
+                        'OR',
                         ['HEADER', 'SUBJECT', query],
                         ['HEADER', 'FROM', query]
-                    ]
-                ], (err, results) => {
+                    ]);
+                }
+
+                // Sender filter
+                if (sender && sender.trim().length > 0) {
+                    criteria.push(['HEADER', 'FROM', sender]);
+                }
+
+                // Date range filters
+                if (dateFrom) {
+                    try {
+                        const fromDate = new Date(dateFrom);
+                        if (!isNaN(fromDate.getTime())) {
+                            criteria.push(['SINCE', fromDate]);
+                        }
+                    } catch (e) {
+                        imap.end();
+                        reject(new Error(`Invalid dateFrom format: ${dateFrom}. Use ISO 8601 format.`));
+                        return;
+                    }
+                }
+
+                if (dateTo) {
+                    try {
+                        const toDate = new Date(dateTo);
+                        if (!isNaN(toDate.getTime())) {
+                            criteria.push(['BEFORE', toDate]);
+                        }
+                    } catch (e) {
+                        imap.end();
+                        reject(new Error(`Invalid dateTo format: ${dateTo}. Use ISO 8601 format.`));
+                        return;
+                    }
+                }
+
+                // Unread only filter
+                if (unreadOnly) {
+                    criteria.push('UNSEEN');
+                }
+
+                // If no criteria, search all
+                if (criteria.length === 0) {
+                    criteria.push('ALL');
+                }
+
+                // CRITICAL: imap.search() returns UIDs by default (NOT sequence numbers)
+                imap.search(criteria, (err, results) => {
                     if (err) {
+                        imap.end();
                         reject(err);
                         return;
                     }
@@ -484,19 +713,24 @@ class YahooMailMCPServer {
                     if (!results || results.length === 0) {
                         imap.end();
                         resolve({
-                            content: [
-                                {
-                                    type: 'text',
-                                    text: `🔍 No emails found matching "${query}"`
-                                }
-                            ]
+                            content: [{
+                                type: 'text',
+                                text: JSON.stringify({
+                                    emails: [],
+                                    totalMatches: 0,
+                                    query: query,
+                                    filters: options,
+                                    folder: folder
+                                }, null, 2)
+                            }]
                         });
                         return;
                     }
 
-                    // Get the most recent results
+                    // Get the most recent results (UIDs are already sorted)
                     const limitedResults = results.slice(-count);
 
+                    // Fetch details for these UIDs
                     const fetch = imap.fetch(limitedResults, {
                         bodies: 'HEADER.FIELDS (FROM TO SUBJECT DATE)',
                         struct: true
@@ -506,6 +740,7 @@ class YahooMailMCPServer {
 
                     fetch.on('message', (msg, seqno) => {
                         let header = '';
+                        let attrs = null;
 
                         msg.on('body', (stream, info) => {
                             stream.on('data', (chunk) => {
@@ -513,35 +748,48 @@ class YahooMailMCPServer {
                             });
                         });
 
+                        msg.once('attributes', (attributes) => {
+                            attrs = attributes;
+                        });
+
                         msg.once('end', () => {
                             const parsed = Imap.parseHeader(header);
                             emails.push({
+                                uid: attrs.uid,
                                 sequenceNumber: seqno,
                                 from: parsed.from?.[0] || 'Unknown',
                                 subject: parsed.subject?.[0] || 'No Subject',
-                                date: parsed.date?.[0] || 'Unknown Date'
+                                date: parsed.date?.[0] || 'Unknown Date',
+                                size: attrs.size || 0,
+                                flags: attrs.flags || [],
+                                hasAttachments: this.hasAttachments(attrs.struct)
                             });
                         });
                     });
 
-                    fetch.once('error', reject);
+                    fetch.once('error', (err) => {
+                        imap.end();
+                        reject(err);
+                    });
 
                     fetch.once('end', () => {
                         imap.end();
 
-                        const emailList = emails.map(email =>
-                            `📧 [${email.sequenceNumber}] From: ${email.from}\n` +
-                            `   Subject: ${email.subject}\n` +
-                            `   Date: ${email.date}\n`
-                        ).join('\n');
+                        // Sort by UID (newest first typically)
+                        emails.sort((a, b) => b.uid - a.uid);
 
                         resolve({
-                            content: [
-                                {
-                                    type: 'text',
-                                    text: `🔍 Found ${emails.length} emails matching "${query}":\n\n${emailList}`
-                                }
-                            ]
+                            content: [{
+                                type: 'text',
+                                text: JSON.stringify({
+                                    emails: emails,
+                                    totalMatches: results.length,
+                                    returned: emails.length,
+                                    query: query,
+                                    filters: options,
+                                    folder: folder
+                                }, null, 2)
+                            }]
                         });
                     });
                 });
@@ -575,11 +823,11 @@ class YahooMailMCPServer {
     }
 
     /**
-     * Helper method for batch email modification operations
+     * Helper method for batch email modification operations using UIDs
      */
-    async modifyEmails(sequenceNumbers, operation, operationName) {
+    async modifyEmails(uids, operation, operationName, folder = 'INBOX') {
         // Validate input
-        const validationError = this.validateSequenceNumbers(sequenceNumbers);
+        const validationError = this.validateUIDs(uids);
         if (validationError) {
             return {
                 content: [{
@@ -592,37 +840,33 @@ class YahooMailMCPServer {
         const imap = await this.createImapConnection();
 
         return new Promise((resolve, reject) => {
-            imap.openBox('INBOX', false, (err, box) => {  // false = read-write mode!
+            imap.openBox(folder, false, (err, box) => {  // false = read-write mode
                 if (err) {
                     imap.end();
-                    reject(err);
+                    reject(new Error(`Failed to open folder "${folder}": ${err.message}`));
                     return;
                 }
 
-                // Validate sequence numbers range
-                const maxSeq = box.messages.total;
-                const invalid = sequenceNumbers.filter(n => n < 1 || n > maxSeq);
-                if (invalid.length > 0) {
-                    imap.end();
-                    reject(new Error(`Invalid sequence numbers: ${invalid.join(', ')}. Valid range: 1-${maxSeq}`));
-                    return;
-                }
+                const source = uids.join(',');
 
-                const source = sequenceNumbers.join(',');
-
-                // Execute the operation
+                // Execute the UID-based operation
                 operation(imap, source, (err) => {
                     imap.end();
 
                     if (err) {
-                        reject(err);
+                        // Check for UID not found errors
+                        if (err.message.includes('UID') || err.message.includes('No matching messages')) {
+                            reject(new Error(`One or more UIDs not found: ${uids.join(', ')}. They may have been deleted or moved.`));
+                        } else {
+                            reject(err);
+                        }
                         return;
                     }
 
                     resolve({
                         content: [{
                             type: 'text',
-                            text: `Successfully ${operationName} ${sequenceNumbers.length} email(s): ${sequenceNumbers.join(', ')}`
+                            text: `Successfully ${operationName} ${uids.length} email(s) with UIDs: ${uids.join(', ')}`
                         }]
                     });
                 });
@@ -631,11 +875,11 @@ class YahooMailMCPServer {
     }
 
     /**
-     * Helper method for reading multiple emails
+     * Helper method for reading multiple emails using UIDs
      */
-    async readEmails(sequenceNumbers) {
+    async readEmails(uids, folder = 'INBOX') {
         // Validate input
-        const validationError = this.validateSequenceNumbers(sequenceNumbers);
+        const validationError = this.validateUIDs(uids);
         if (validationError) {
             return {
                 content: [{
@@ -648,33 +892,37 @@ class YahooMailMCPServer {
         const imap = await this.createImapConnection();
 
         return new Promise((resolve, reject) => {
-            imap.openBox('INBOX', true, (err, box) => {  // true = read-only mode
+            imap.openBox(folder, true, (err, box) => {  // true = read-only mode
                 if (err) {
                     imap.end();
-                    reject(err);
+                    reject(new Error(`Failed to open folder "${folder}": ${err.message}`));
                     return;
                 }
 
-                // Validate sequence numbers range
-                const maxSeq = box.messages.total;
-                const invalid = sequenceNumbers.filter(n => n < 1 || n > maxSeq);
-                if (invalid.length > 0) {
-                    imap.end();
-                    reject(new Error(`Invalid sequence numbers: ${invalid.join(', ')}. Valid range: 1-${maxSeq}`));
-                    return;
-                }
+                const source = uids.join(',');
 
-                const source = sequenceNumbers.join(',');
-                const fetch = imap.seq.fetch(source, { bodies: '' });
+                // CRITICAL: Use imap.fetch() (NOT imap.seq.fetch) for UID-based fetch
+                const fetch = imap.fetch(source, {
+                    bodies: '',
+                    struct: true
+                });
+
                 const emails = [];
+                const foundUIDs = new Set();
 
                 fetch.on('message', (msg, seqno) => {
                     let buffer = '';
+                    let attrs = null;
 
                     msg.on('body', (stream, info) => {
                         stream.on('data', (chunk) => {
                             buffer += chunk.toString('ascii');
                         });
+                    });
+
+                    msg.once('attributes', (attributes) => {
+                        attrs = attributes;
+                        foundUIDs.add(attributes.uid);
                     });
 
                     msg.once('end', () => {
@@ -685,11 +933,15 @@ class YahooMailMCPServer {
                             }
 
                             emails.push({
-                                sequenceNumber: seqno,
+                                uid: attrs.uid,
+                                sequenceNumber: seqno,  // Still include for reference
                                 from: parsed.from?.text || 'Unknown',
                                 to: parsed.to?.text || 'Unknown',
                                 subject: parsed.subject || 'No Subject',
                                 date: parsed.date || 'Unknown Date',
+                                size: attrs.size || 0,
+                                flags: attrs.flags || [],
+                                hasAttachments: this.hasAttachments(attrs.struct),
                                 content: parsed.text || parsed.html || 'No content available'
                             });
                         });
@@ -704,16 +956,30 @@ class YahooMailMCPServer {
                 fetch.once('end', () => {
                     imap.end();
 
-                    // Sort by sequence number for consistent output
-                    emails.sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+                    // Check for missing UIDs
+                    const missingUIDs = uids.filter(uid => !foundUIDs.has(uid));
+                    if (missingUIDs.length > 0) {
+                        reject(new Error(
+                            `UIDs not found: ${missingUIDs.join(', ')}. ` +
+                            `Found ${emails.length} of ${uids.length} requested emails. ` +
+                            `Missing UIDs may have been deleted or moved to another folder.`
+                        ));
+                        return;
+                    }
+
+                    // Sort by UID for consistent output
+                    emails.sort((a, b) => a.uid - b.uid);
 
                     // Format output
                     const emailContent = emails.map(email =>
-                        `📧 Email #${email.sequenceNumber}\n\n` +
+                        `📧 Email UID: ${email.uid} (Seq #${email.sequenceNumber})\n\n` +
                         `From: ${email.from}\n` +
                         `To: ${email.to}\n` +
                         `Subject: ${email.subject}\n` +
-                        `Date: ${email.date}\n\n` +
+                        `Date: ${email.date}\n` +
+                        `Size: ${email.size} bytes\n` +
+                        `Flags: ${email.flags.join(', ') || 'None'}\n` +
+                        `Has Attachments: ${email.hasAttachments ? 'Yes' : 'No'}\n\n` +
                         `--- Content ---\n` +
                         `${email.content}`
                     ).join('\n\n' + '='.repeat(80) + '\n\n');
@@ -732,78 +998,200 @@ class YahooMailMCPServer {
     /**
      * Mark emails as read
      */
-    async markAsRead(sequenceNumbers) {
+    async markAsRead(uids, folder = 'INBOX') {
         return this.modifyEmails(
-            sequenceNumbers,
-            (imap, source, callback) => imap.seq.addFlags(source, '\\Seen', callback),
-            'marked as read'
+            uids,
+            (imap, source, callback) => imap.addFlags(source, '\\Seen', callback),  // NO .seq
+            'marked as read',
+            folder
         );
     }
 
     /**
      * Mark emails as unread
      */
-    async markAsUnread(sequenceNumbers) {
+    async markAsUnread(uids, folder = 'INBOX') {
         return this.modifyEmails(
-            sequenceNumbers,
-            (imap, source, callback) => imap.seq.delFlags(source, '\\Seen', callback),
-            'marked as unread'
+            uids,
+            (imap, source, callback) => imap.delFlags(source, '\\Seen', callback),  // NO .seq
+            'marked as unread',
+            folder
         );
     }
 
     /**
      * Flag emails as important/starred
      */
-    async flagEmails(sequenceNumbers) {
+    async flagEmails(uids, folder = 'INBOX') {
         return this.modifyEmails(
-            sequenceNumbers,
-            (imap, source, callback) => imap.seq.addFlags(source, '\\Flagged', callback),
-            'flagged'
+            uids,
+            (imap, source, callback) => imap.addFlags(source, '\\Flagged', callback),  // NO .seq
+            'flagged',
+            folder
         );
     }
 
     /**
      * Remove flag/star from emails
      */
-    async unflagEmails(sequenceNumbers) {
+    async unflagEmails(uids, folder = 'INBOX') {
         return this.modifyEmails(
-            sequenceNumbers,
-            (imap, source, callback) => imap.seq.delFlags(source, '\\Flagged', callback),
-            'unflagged'
+            uids,
+            (imap, source, callback) => imap.delFlags(source, '\\Flagged', callback),  // NO .seq
+            'unflagged',
+            folder
         );
     }
 
     /**
      * Delete emails (move to Trash)
      */
-    async deleteEmails(sequenceNumbers) {
+    async deleteEmails(uids, folder = 'INBOX') {
         return this.modifyEmails(
-            sequenceNumbers,
-            (imap, source, callback) => imap.seq.move(source, 'Trash', callback),
-            'moved to Trash'
+            uids,
+            (imap, source, callback) => imap.move(source, 'Trash', callback),  // NO .seq
+            'moved to Trash',
+            folder
         );
     }
 
     /**
      * Archive emails
      */
-    async archiveEmails(sequenceNumbers) {
+    async archiveEmails(uids, folder = 'INBOX') {
         return this.modifyEmails(
-            sequenceNumbers,
-            (imap, source, callback) => imap.seq.move(source, 'Archive', callback),
-            'archived'
+            uids,
+            (imap, source, callback) => imap.move(source, 'Archive', callback),  // NO .seq
+            'archived',
+            folder
         );
     }
 
     /**
      * Move emails to a specific folder
      */
-    async moveEmails(sequenceNumbers, folderName) {
+    async moveEmails(uids, folderName, sourceFolder = 'INBOX') {
         return this.modifyEmails(
-            sequenceNumbers,
-            (imap, source, callback) => imap.seq.move(source, folderName, callback),
-            `moved to ${folderName}`
+            uids,
+            (imap, source, callback) => imap.move(source, folderName, callback),  // NO .seq
+            `moved to ${folderName}`,
+            sourceFolder
         );
+    }
+
+    /**
+     * Helper: Detect if email has attachments from BODYSTRUCTURE
+     */
+    hasAttachments(struct) {
+        if (!struct || !Array.isArray(struct)) return false;
+
+        // Recursive check for attachment disposition
+        const checkPart = (part) => {
+            if (!part) return false;
+
+            // Check if this part is an attachment
+            if (part.disposition && part.disposition.type === 'attachment') {
+                return true;
+            }
+
+            // Recursively check sub-parts
+            if (Array.isArray(part)) {
+                return part.some(p => checkPart(p));
+            }
+
+            return false;
+        };
+
+        return checkPart(struct);
+    }
+
+    /**
+     * Helper: Flatten nested folder structure for list_folders
+     */
+    flattenFolders(boxes, parent = null) {
+        const result = [];
+
+        for (const [name, box] of Object.entries(boxes)) {
+            const fullName = parent ? `${parent}/${name}` : name;
+
+            // Skip NOSELECT folders (can't select them)
+            const isNoSelect = box.attribs && box.attribs.includes('\\Noselect');
+
+            result.push({
+                name: fullName,
+                delimiter: box.delimiter || '/',
+                flags: box.attribs || [],
+                selectable: !isNoSelect
+            });
+
+            // Recursively process children
+            if (box.children) {
+                result.push(...this.flattenFolders(box.children, fullName));
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Helper: Validate UIDs array
+     */
+    validateUIDs(uids) {
+        if (!uids) {
+            return 'uids is required';
+        }
+
+        if (!Array.isArray(uids)) {
+            return 'uids must be an array';
+        }
+
+        if (uids.length === 0) {
+            return 'uids cannot be empty';
+        }
+
+        const invalidValues = uids.filter(n =>
+            n === undefined ||
+            n === null ||
+            typeof n !== 'number' ||
+            n <= 0 ||
+            !Number.isInteger(n)
+        );
+
+        if (invalidValues.length > 0) {
+            return 'uids contains invalid values (must be positive integers)';
+        }
+
+        return null;
+    }
+
+    /**
+     * List all available IMAP folders
+     */
+    async listFolders() {
+        const imap = await this.createImapConnection();
+
+        return new Promise((resolve, reject) => {
+            imap.getBoxes((err, boxes) => {
+                imap.end();
+
+                if (err) {
+                    reject(new Error(`Failed to retrieve folders: ${err.message}`));
+                    return;
+                }
+
+                const folders = this.flattenFolders(boxes);
+
+                resolve({
+                    content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            folders: folders,
+                            count: folders.length
+                        }, null, 2)
+                    }]
+                });
+            });
+        });
     }
 
     setupErrorHandling() {
@@ -1164,7 +1552,7 @@ class YahooMailMCPServer {
             res.json({
                 status: 'ok',
                 service: 'yahoo-mail-mcp',
-                version: '2.0.1',
+                version: '3.0.0',
                 timestamp: new Date().toISOString(),
                 environment: {
                     nodeVersion: process.version,
@@ -1249,7 +1637,7 @@ class YahooMailMCPServer {
         app.get('/', (req, res) => {
             res.json({
                 name: 'Yahoo Mail MCP Server',
-                version: '2.0.1',
+                version: '3.0.0',
                 description: 'MCP server for Yahoo Mail access via IMAP',
                 endpoints: {
                     health: '/health',
