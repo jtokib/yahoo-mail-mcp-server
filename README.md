@@ -846,6 +846,20 @@ MIT License - See LICENSE file for details
 
 ## Changelog
 
+### v2.0.1 (2025-01-17)
+
+- Fixed: Enhanced input validation for all email operations
+- Added shared validation helper to prevent IMAP errors with invalid sequence numbers
+- Improved error messages for better debugging
+
+### v2.0.0 (2025-01-16)
+
+- **Breaking Change**: `read_email` now uses `sequenceNumbers` (array) instead of `sequenceNumber` (single number)
+- Added full email management with batch operations support
+- Seven new tools: delete_emails, archive_emails, mark_as_read, mark_as_unread, flag_emails, unflag_emails, move_emails
+- All modification operations support batch processing
+- Enhanced security with reversible operations (soft delete, no permanent deletion)
+
 ### v1.0.0 (2025-01-11)
 
 - Initial release
@@ -870,7 +884,7 @@ A: Currently, this server is configured for Yahoo Mail. To support other provide
 
 ### Q: Is this safe to use with my email account?
 
-A: Yes! The server is read-only and uses app-specific passwords (not your main password). It only reads emails and never modifies, deletes, or sends emails.
+A: Yes! The server uses app-specific passwords (not your main password) and all modification operations are reversible. Delete operations move emails to Trash (recoverable), and the server never permanently deletes emails or sends emails on your behalf.
 
 ### Q: How much does it cost to run on Render?
 

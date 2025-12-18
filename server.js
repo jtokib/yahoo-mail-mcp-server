@@ -23,7 +23,7 @@ class YahooMailMCPServer {
         this.server = new Server(
             {
                 name: 'yahoo-mail-mcp',
-                version: '1.0.0',
+                version: '2.0.1',
             },
             {
                 capabilities: {
@@ -550,9 +550,45 @@ class YahooMailMCPServer {
     }
 
     /**
+     * Validate sequence numbers array for all email operations
+     * @returns {string|null} Error message if invalid, null if valid
+     */
+    validateSequenceNumbers(sequenceNumbers) {
+        if (!sequenceNumbers) {
+            return 'sequenceNumbers is required';
+        }
+
+        if (!Array.isArray(sequenceNumbers)) {
+            return 'sequenceNumbers must be an array';
+        }
+
+        if (sequenceNumbers.length === 0) {
+            return 'sequenceNumbers cannot be empty';
+        }
+
+        const invalidValues = sequenceNumbers.filter(n => n === undefined || n === null || typeof n !== 'number');
+        if (invalidValues.length > 0) {
+            return 'sequenceNumbers contains invalid values (must be numbers)';
+        }
+
+        return null;
+    }
+
+    /**
      * Helper method for batch email modification operations
      */
     async modifyEmails(sequenceNumbers, operation, operationName) {
+        // Validate input
+        const validationError = this.validateSequenceNumbers(sequenceNumbers);
+        if (validationError) {
+            return {
+                content: [{
+                    type: 'text',
+                    text: `Error: ${validationError}`
+                }]
+            };
+        }
+
         const imap = await this.createImapConnection();
 
         return new Promise((resolve, reject) => {
@@ -563,7 +599,7 @@ class YahooMailMCPServer {
                     return;
                 }
 
-                // Validate sequence numbers
+                // Validate sequence numbers range
                 const maxSeq = box.messages.total;
                 const invalid = sequenceNumbers.filter(n => n < 1 || n > maxSeq);
                 if (invalid.length > 0) {
@@ -598,6 +634,17 @@ class YahooMailMCPServer {
      * Helper method for reading multiple emails
      */
     async readEmails(sequenceNumbers) {
+        // Validate input
+        const validationError = this.validateSequenceNumbers(sequenceNumbers);
+        if (validationError) {
+            return {
+                content: [{
+                    type: 'text',
+                    text: `Error: ${validationError}`
+                }]
+            };
+        }
+
         const imap = await this.createImapConnection();
 
         return new Promise((resolve, reject) => {
@@ -608,7 +655,7 @@ class YahooMailMCPServer {
                     return;
                 }
 
-                // Validate sequence numbers
+                // Validate sequence numbers range
                 const maxSeq = box.messages.total;
                 const invalid = sequenceNumbers.filter(n => n < 1 || n > maxSeq);
                 if (invalid.length > 0) {
@@ -1117,7 +1164,7 @@ class YahooMailMCPServer {
             res.json({
                 status: 'ok',
                 service: 'yahoo-mail-mcp',
-                version: '1.0.0',
+                version: '2.0.1',
                 timestamp: new Date().toISOString(),
                 environment: {
                     nodeVersion: process.version,
@@ -1202,7 +1249,7 @@ class YahooMailMCPServer {
         app.get('/', (req, res) => {
             res.json({
                 name: 'Yahoo Mail MCP Server',
-                version: '1.0.0',
+                version: '2.0.1',
                 description: 'MCP server for Yahoo Mail access via IMAP',
                 endpoints: {
                     health: '/health',
