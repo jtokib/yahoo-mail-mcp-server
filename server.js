@@ -847,29 +847,57 @@ class YahooMailMCPServer {
                     return;
                 }
 
-                const source = uids.join(',');
+                const successfulUIDs = [];
+                const failedUIDs = [];
+                let processedCount = 0;
 
-                // Execute the UID-based operation
-                operation(imap, source, (err) => {
-                    imap.end();
+                // Process each UID individually to ensure all are processed
+                const processNextUID = () => {
+                    if (processedCount >= uids.length) {
+                        // All UIDs processed
+                        imap.end();
 
-                    if (err) {
-                        // Check for UID not found errors
-                        if (err.message.includes('UID') || err.message.includes('No matching messages')) {
-                            reject(new Error(`One or more UIDs not found: ${uids.join(', ')}. They may have been deleted or moved.`));
+                        if (failedUIDs.length === uids.length) {
+                            // All failed
+                            reject(new Error(`Failed to ${operationName} ${failedUIDs.length} email(s). UIDs may not exist: ${failedUIDs.join(', ')}`));
+                        } else if (successfulUIDs.length > 0) {
+                            // At least some succeeded
+                            const message = failedUIDs.length > 0
+                                ? `Successfully ${operationName} ${successfulUIDs.length} of ${uids.length} email(s). ` +
+                                  `Successful: ${successfulUIDs.join(', ')}. Failed: ${failedUIDs.join(', ')}`
+                                : `Successfully ${operationName} ${successfulUIDs.length} email(s) with UIDs: ${successfulUIDs.join(', ')}`;
+
+                            resolve({
+                                content: [{
+                                    type: 'text',
+                                    text: message
+                                }]
+                            });
                         } else {
-                            reject(err);
+                            reject(new Error(`Failed to ${operationName} any emails`));
                         }
                         return;
                     }
 
-                    resolve({
-                        content: [{
-                            type: 'text',
-                            text: `Successfully ${operationName} ${uids.length} email(s) with UIDs: ${uids.join(', ')}`
-                        }]
+                    const uid = uids[processedCount];
+                    processedCount++;
+
+                    // Execute the UID-based operation for this single UID
+                    operation(imap, uid.toString(), (err) => {
+                        if (err) {
+                            console.error(`[UID ${uid}] Failed to ${operationName}:`, err.message);
+                            failedUIDs.push(uid);
+                        } else {
+                            successfulUIDs.push(uid);
+                        }
+
+                        // Continue to next UID (don't stop on errors)
+                        processNextUID();
                     });
-                });
+                };
+
+                // Start processing
+                processNextUID();
             });
         });
     }

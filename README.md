@@ -5,11 +5,13 @@ A Model Context Protocol (MCP) server that provides full email management for Ya
 ## Features
 
 - **Secure OAuth 2.0 Authentication**: Protect your remote MCP server with OAuth 2.0 authorization code flow with PKCE
+- **UID-Based Operations**: Uses permanent IMAP UIDs that don't change when emails are deleted (v3.0.0+)
 - **Full Email Management**: Complete email operations with batch processing support
-- **Ten Powerful Tools**:
-  - `list_emails`: List recent emails from your inbox
+- **Eleven Powerful Tools**:
+  - `list_emails`: List recent emails with enriched metadata (size, flags, attachments) and pagination
   - `read_email`: Read the full content of emails (batch support)
-  - `search_emails`: Search emails by subject or sender
+  - `search_emails`: Advanced search with filters (date ranges, sender, unread status)
+  - `list_folders`: Discover all available IMAP folders
   - `delete_emails`: Move emails to Trash (soft delete, recoverable)
   - `archive_emails`: Archive emails for long-term storage
   - `mark_as_read`: Mark emails as read
@@ -17,7 +19,9 @@ A Model Context Protocol (MCP) server that provides full email management for Ya
   - `flag_emails`: Flag emails as important/starred
   - `unflag_emails`: Remove flag from emails
   - `move_emails`: Move emails to any folder
-- **Batch Operations**: All management operations support processing multiple emails at once
+- **Enriched Metadata**: All emails include UID, size, flags, hasAttachments, and folder information
+- **Advanced Search**: Filter by date range, sender, unread status, and search across any folder
+- **Batch Operations**: All management operations support processing multiple emails at once with accurate success/failure tracking
 - **Dual Transport Modes**:
   - `stdio`: For local Claude Desktop integration
   - `sse`: For remote access via HTTP/Server-Sent Events (required for Render.com)
@@ -630,160 +634,345 @@ When running in SSE mode, the server exposes these endpoints:
 }
 ```
 
+## Breaking Changes & Migration Guide
+
+### ⚠️ v3.0.0 Breaking Changes
+
+Version 3.0.0 introduces **UID-based operations** which fundamentally changes how you interact with emails. This is a breaking change that requires updating your code.
+
+#### What Changed
+
+**1. Parameter Rename: `sequenceNumbers` → `uids`**
+
+All email management tools now use `uids` (permanent identifiers) instead of `sequenceNumbers` (temporary positions):
+
+```javascript
+// ❌ v2.x (OLD - sequence numbers)
+read_email({ sequenceNumbers: [1, 2, 3] })
+delete_emails({ sequenceNumbers: [5] })
+
+// ✅ v3.0.0 (NEW - UIDs)
+read_email({ uids: [510867, 510866, 510862] })
+delete_emails({ uids: [510867] })
+```
+
+**2. Response Format: Plain Text → JSON**
+
+All tools now return structured JSON instead of plain text:
+
+```javascript
+// ❌ v2.x response
+"Email 1 of 10..."
+
+// ✅ v3.0.0 response
+{
+  "emails": [...],
+  "totalCount": 10,
+  "returned": 10
+}
+```
+
+**3. New Required Workflow**
+
+You must now get UIDs from `list_emails` or `search_emails` before performing operations:
+
+```javascript
+// Step 1: Get UIDs
+const result = list_emails({ count: 10 });
+// Returns: { emails: [{ uid: 510867, ... }, { uid: 510866, ... }] }
+
+// Step 2: Use UIDs for operations
+const uidsToDelete = [510867, 510866];
+delete_emails({ uids: uidsToDelete });
+```
+
+#### Why UIDs Are Better
+
+**Sequence Numbers (v2.x):**
+- ❌ Change when emails are deleted
+- ❌ Position-based (email #1, #2, #3)
+- ❌ Can become invalid between operations
+- ❌ Cause confusion and errors
+
+**UIDs (v3.0.0):**
+- ✅ Permanent identifiers assigned by IMAP server
+- ✅ Never change, even when other emails are deleted
+- ✅ Always valid until email is permanently deleted
+- ✅ Reliable for batch operations
+
+#### Migration Checklist
+
+- [ ] Update all tool calls to use `uids` parameter instead of `sequenceNumbers`
+- [ ] Update code to get UIDs from `list_emails` or `search_emails` first
+- [ ] Update code to handle JSON responses instead of plain text
+- [ ] Test batch operations to ensure all UIDs are processed (v3.0.0 fixes critical batch bug)
+- [ ] Review new features: pagination, enriched metadata, advanced search, folder support
+
+#### New Features in v3.0.0
+
+1. **Enriched Metadata**: All emails include `uid`, `size`, `flags`, `hasAttachments`
+2. **Pagination**: `list_emails` supports `offset` and `limit` parameters
+3. **Advanced Search**: `search_emails` supports date ranges, sender filter, unread-only
+4. **Folder Support**: All tools support `folder` parameter (default: INBOX)
+5. **list_folders**: New tool to discover available IMAP folders
+6. **Accurate Batch Operations**: Fixed critical bug where only first UID was processed
+7. **Enhanced Error Handling**: Better timeout and connection error messages
+
 ## MCP Tools
 
 ### list_emails
 
-List recent emails from your Yahoo Mail inbox.
+List recent emails with enriched metadata (UID, size, flags, attachments) and pagination support.
 
 **Parameters:**
 - `count` (optional): Number of emails to retrieve (default: 10, max: 50)
+- `folder` (optional): Folder to list from (default: 'INBOX'). Use `list_folders` to see available folders
+- `offset` (optional): Number of emails to skip for pagination (default: 0)
 
-**Example:**
-```
-list_emails with count 20
+**Response:** JSON with `emails` array containing enriched metadata for each email:
+- `uid`: Permanent IMAP UID (use this for all operations)
+- `sequenceNumber`: Position in folder (for reference only, don't use for operations)
+- `from`: Sender address
+- `subject`: Email subject
+- `date`: Date in RFC 2822 format
+- `size`: Email size in bytes
+- `flags`: Array of IMAP flags (e.g., `['\\Seen']`, `['\\Flagged']`)
+- `hasAttachments`: Boolean indicating if email has attachments
+
+**Examples:**
+```javascript
+// List 20 most recent emails
+list_emails({ count: 20 })
+
+// List emails with pagination (skip first 10)
+list_emails({ count: 10, offset: 10 })
+
+// List emails from Sent folder
+list_emails({ count: 15, folder: "Sent" })
 ```
 
 ### read_email
 
-Read the full content of emails (supports batch reading).
+Read the full content of emails using UIDs (supports batch reading).
 
 **Parameters:**
-- `sequenceNumbers` (required): Array of sequence numbers to read
+- `uids` (required): Array of UIDs to read (get UIDs from `list_emails` or `search_emails`)
+- `folder` (optional): Folder containing the emails (default: 'INBOX')
+
+**Response:** JSON with enriched email data including body content
 
 **Examples:**
-```
-# Read a single email
-read_email with sequenceNumbers [5]
+```javascript
+// Read a single email
+read_email({ uids: [510867] })
 
-# Read multiple emails
-read_email with sequenceNumbers [1, 2, 3]
+// Read multiple emails
+read_email({ uids: [510867, 510866, 510862] })
+
+// Read email from Sent folder
+read_email({ uids: [510867], folder: "Sent" })
 ```
 
 ### search_emails
 
-Search emails by subject or sender.
+Advanced search with filters for date ranges, sender, and unread status.
 
 **Parameters:**
-- `query` (required): Search term for subject or sender
-- `count` (optional): Number of results to return (default: 10)
+- `query` (optional): Search term for subject or sender (can be empty for date-only searches)
+- `count` (optional): Number of results to return (default: 10, max: 50)
+- `dateFrom` (optional): Filter emails from this date onwards (ISO 8601 or RFC 2822 format)
+- `dateTo` (optional): Filter emails up to this date (ISO 8601 or RFC 2822 format)
+- `sender` (optional): Filter by specific sender email address or name
+- `unreadOnly` (optional): Only return unread emails (default: false)
+- `folder` (optional): Folder to search in (default: 'INBOX')
+
+**Response:** JSON with `emails` array, `totalMatches`, `returned`, `query`, `filters`, and `folder`
+
+**Examples:**
+```javascript
+// Basic search
+search_emails({ query: "invoice", count: 15 })
+
+// Search unread emails only
+search_emails({ query: "meeting", unreadOnly: true })
+
+// Search by date range
+search_emails({ dateFrom: "2025-01-01", dateTo: "2025-01-31" })
+
+// Search by sender
+search_emails({ sender: "boss@company.com" })
+
+// Combined filters
+search_emails({
+  query: "report",
+  sender: "team@company.com",
+  dateFrom: "2025-01-15",
+  unreadOnly: true
+})
+```
+
+### list_folders
+
+Discover all available IMAP folders in your Yahoo Mail account.
+
+**Parameters:** None
+
+**Response:** JSON with array of folder objects containing `name`, `path`, `delimiter`, and `children`
 
 **Example:**
-```
-search_emails with query "invoice" and count 15
+```javascript
+// List all folders
+list_folders()
+
+// Example response:
+// {
+//   "folders": [
+//     { "name": "INBOX", "path": "INBOX" },
+//     { "name": "Sent", "path": "Sent" },
+//     { "name": "Trash", "path": "Trash" },
+//     { "name": "Archive", "path": "Archive" }
+//   ]
+// }
 ```
 
 ### delete_emails
 
-Move emails to Trash folder (soft delete - emails can be recovered).
+Move emails to Trash folder using UIDs (soft delete - emails can be recovered).
 
 **Parameters:**
-- `sequenceNumbers` (required): Array of sequence numbers to delete
+- `uids` (required): Array of UIDs to delete (get UIDs from `list_emails` or `search_emails`)
+- `folder` (optional): Source folder (default: 'INBOX')
+
+**Response:** Success/failure message with accurate count of processed emails
 
 **Examples:**
-```
-# Delete a single email
-delete_emails with sequenceNumbers [5]
+```javascript
+// Delete a single email
+delete_emails({ uids: [510867] })
 
-# Delete multiple emails
-delete_emails with sequenceNumbers [1, 3, 5, 7]
+// Delete multiple emails
+delete_emails({ uids: [510867, 510866, 510862, 510856] })
+
+// Delete from Sent folder
+delete_emails({ uids: [510867], folder: "Sent" })
 ```
 
 ### archive_emails
 
-Move emails to Archive folder for long-term storage.
+Move emails to Archive folder using UIDs for long-term storage.
 
 **Parameters:**
-- `sequenceNumbers` (required): Array of sequence numbers to archive
+- `uids` (required): Array of UIDs to archive
+- `folder` (optional): Source folder (default: 'INBOX')
+
+**Response:** Success/failure message with accurate count of processed emails
 
 **Examples:**
-```
-# Archive a single email
-archive_emails with sequenceNumbers [10]
+```javascript
+// Archive a single email
+archive_emails({ uids: [510867] })
 
-# Archive multiple emails
-archive_emails with sequenceNumbers [5, 6, 7, 8]
+// Archive multiple emails
+archive_emails({ uids: [510867, 510866, 510862, 510851] })
 ```
 
 ### mark_as_read
 
-Mark emails as read by adding the Seen flag.
+Mark emails as read using UIDs by adding the Seen flag.
 
 **Parameters:**
-- `sequenceNumbers` (required): Array of sequence numbers to mark as read
+- `uids` (required): Array of UIDs to mark as read
+- `folder` (optional): Folder containing the emails (default: 'INBOX')
+
+**Response:** Success/failure message with accurate count of processed emails
 
 **Examples:**
-```
-# Mark a single email as read
-mark_as_read with sequenceNumbers [5]
+```javascript
+// Mark a single email as read
+mark_as_read({ uids: [510867] })
 
-# Mark multiple emails as read
-mark_as_read with sequenceNumbers [1, 2, 3, 4, 5]
+// Mark multiple emails as read
+mark_as_read({ uids: [510867, 510866, 510862, 510851, 510865] })
 ```
 
 ### mark_as_unread
 
-Mark emails as unread by removing the Seen flag.
+Mark emails as unread using UIDs by removing the Seen flag.
 
 **Parameters:**
-- `sequenceNumbers` (required): Array of sequence numbers to mark as unread
+- `uids` (required): Array of UIDs to mark as unread
+- `folder` (optional): Folder containing the emails (default: 'INBOX')
+
+**Response:** Success/failure message with accurate count of processed emails
 
 **Examples:**
-```
-# Mark a single email as unread
-mark_as_unread with sequenceNumbers [5]
+```javascript
+// Mark a single email as unread
+mark_as_unread({ uids: [510867] })
 
-# Mark multiple emails as unread
-mark_as_unread with sequenceNumbers [10, 11, 12]
+// Mark multiple emails as unread
+mark_as_unread({ uids: [510869, 510867, 510866] })
 ```
 
 ### flag_emails
 
-Flag emails as important/starred by adding the Flagged flag.
+Flag emails as important/starred using UIDs by adding the Flagged flag.
 
 **Parameters:**
-- `sequenceNumbers` (required): Array of sequence numbers to flag
+- `uids` (required): Array of UIDs to flag
+- `folder` (optional): Folder containing the emails (default: 'INBOX')
+
+**Response:** Success/failure message with accurate count of processed emails
 
 **Examples:**
-```
-# Flag a single email
-flag_emails with sequenceNumbers [5]
+```javascript
+// Flag a single email
+flag_emails({ uids: [510867] })
 
-# Flag multiple emails
-flag_emails with sequenceNumbers [1, 5, 10]
+// Flag multiple emails
+flag_emails({ uids: [510851, 510865, 510864] })
 ```
 
 ### unflag_emails
 
-Remove flag/star from emails by removing the Flagged flag.
+Remove flag/star from emails using UIDs by removing the Flagged flag.
 
 **Parameters:**
-- `sequenceNumbers` (required): Array of sequence numbers to unflag
+- `uids` (required): Array of UIDs to unflag
+- `folder` (optional): Folder containing the emails (default: 'INBOX')
+
+**Response:** Success/failure message with accurate count of processed emails
 
 **Examples:**
-```
-# Unflag a single email
-unflag_emails with sequenceNumbers [5]
+```javascript
+// Unflag a single email
+unflag_emails({ uids: [510867] })
 
-# Unflag multiple emails
-unflag_emails with sequenceNumbers [1, 2, 3]
+// Unflag multiple emails
+unflag_emails({ uids: [510867, 510866, 510862] })
 ```
 
 ### move_emails
 
-Move emails to a specified folder.
+Move emails to a specified folder using UIDs.
 
 **Parameters:**
-- `sequenceNumbers` (required): Array of sequence numbers to move
+- `uids` (required): Array of UIDs to move
 - `folderName` (required): Name of the destination folder (e.g., "Work", "Personal", "Archive")
+- `sourceFolder` (optional): Source folder (default: 'INBOX')
+
+**Response:** Success/failure message with accurate count of processed emails
 
 **Examples:**
-```
-# Move a single email to Work folder
-move_emails with sequenceNumbers [5] and folderName "Work"
+```javascript
+// Move a single email to Work folder
+move_emails({ uids: [510867], folderName: "Work" })
 
-# Move multiple emails to Personal folder
-move_emails with sequenceNumbers [10, 11, 12] and folderName "Personal"
+// Move multiple emails to Personal folder
+move_emails({ uids: [510867, 510866, 510862], folderName: "Personal" })
+
+// Move from Sent to Archive
+move_emails({ uids: [510867], folderName: "Archive", sourceFolder: "Sent" })
 ```
 
 ## Performance Considerations
@@ -845,6 +1034,32 @@ MIT License - See LICENSE file for details
 - **MCP Docs**: https://modelcontextprotocol.io
 
 ## Changelog
+
+### v3.0.0 (2025-01-18) - UID Migration
+
+**BREAKING CHANGES:**
+- All tools now use `uids` parameter instead of `sequenceNumbers`
+- Response format changed from plain text to structured JSON
+- UIDs are permanent identifiers that don't change when emails are deleted
+
+**New Features:**
+- Enriched metadata: All emails include `uid`, `size`, `flags`, `hasAttachments`
+- Pagination support: `list_emails` accepts `offset` and `limit` parameters
+- Advanced search filters: `dateFrom`, `dateTo`, `sender`, `unreadOnly` parameters
+- Folder support: All tools accept `folder` parameter (default: INBOX)
+- New tool: `list_folders` to discover available IMAP folders
+- Enhanced error handling: Better timeout and connection error messages with Render spindown detection
+
+**Bug Fixes:**
+- **CRITICAL**: Fixed batch operations bug where only first UID was processed
+- All batch operations now accurately process every UID in the array
+- Success/failure messages now report exact counts of processed emails
+
+**Migration Guide:**
+- Replace `sequenceNumbers` with `uids` in all tool calls
+- Get UIDs from `list_emails` or `search_emails` responses
+- Update code to handle JSON responses instead of plain text
+- See "Breaking Changes & Migration Guide" section above for details
 
 ### v2.0.1 (2025-01-17)
 
