@@ -1428,9 +1428,17 @@ class YahooMailMCPServer {
                 return res.status(400).send('Unsupported response_type');
             }
 
-            // Validate redirect_uri (must be Claude's callback)
-            if (!redirect_uri || (!redirect_uri.includes('claude.ai') && !redirect_uri.includes('claude.com') && !redirect_uri.includes('localhost'))) {
-                console.error('[OAuth] Invalid redirect_uri:', redirect_uri);
+            // Validate redirect_uri (must be an allowed host)
+            const allowedRedirectHosts = ['claude.ai', 'claude.com', 'localhost', '127.0.0.1'];
+            let redirectHost;
+            try {
+                redirectHost = new URL(redirect_uri).hostname;
+            } catch {
+                console.error('[OAuth] Malformed redirect_uri:', redirect_uri);
+                return res.status(400).send('Invalid redirect_uri');
+            }
+            if (!allowedRedirectHosts.includes(redirectHost)) {
+                console.error('[OAuth] Disallowed redirect_uri host:', redirectHost);
                 return res.status(400).send('Invalid redirect_uri');
             }
 
