@@ -14,6 +14,7 @@ import { simpleParser } from 'mailparser';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import crypto from 'crypto';
 
 // Load environment variables from .env file (for local development)
 dotenv.config();
@@ -1434,7 +1435,7 @@ class YahooMailMCPServer {
             }
 
             // Generate authorization code
-            const authCode = Buffer.from(`${client_id}:${Date.now()}:${Math.random()}`).toString('base64');
+            const authCode = crypto.randomBytes(32).toString('base64url');
 
             // Store auth code with PKCE challenge (in-memory - use Redis/DB in production)
             if (!this.authCodes) this.authCodes = new Map();
@@ -1514,7 +1515,6 @@ class YahooMailMCPServer {
 
                 // Validate PKCE code verifier
                 if (authData.code_challenge) {
-                    const crypto = await import('crypto');
                     const hash = crypto.createHash('sha256').update(code_verifier).digest('base64url');
                     if (hash !== authData.code_challenge) {
                         console.error('[OAuth] PKCE validation failed');
@@ -1529,7 +1529,7 @@ class YahooMailMCPServer {
                 this.authCodes.delete(code);
 
                 // Generate access token
-                const accessToken = Buffer.from(`${reqClientId}:${Date.now()}:${Math.random()}`).toString('base64');
+                const accessToken = crypto.randomBytes(32).toString('base64url');
                 this.validTokens.add(accessToken);
 
                 console.error('[OAuth] Access token generated from authorization code');
@@ -1545,7 +1545,7 @@ class YahooMailMCPServer {
             // Handle Client Credentials Grant
             if (grantType === 'client_credentials') {
                 // Generate access token
-                const accessToken = Buffer.from(`${clientId}:${Date.now()}:${Math.random()}`).toString('base64');
+                const accessToken = crypto.randomBytes(32).toString('base64url');
                 this.validTokens.add(accessToken);
 
                 console.error('[OAuth] Access token generated via client credentials');
