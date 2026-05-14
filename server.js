@@ -14,6 +14,7 @@ import { simpleParser } from 'mailparser';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import crypto from 'crypto';
 
 // Load environment variables from .env file (for local development)
 dotenv.config();
@@ -35,13 +36,18 @@ class YahooMailMCPServer {
         // Store active SSE transports (for routing messages)
         this.transports = new Map();
 
-        // Store valid OAuth access tokens (in-memory)
-        // In production, use Redis or a database with TTL
-        this.validTokens = new Set();
+        // Store valid OAuth access tokens with creation timestamp
+        // Token format: Map<string, { createdAt: number }>
+        this.validTokens = new Map();
 
         // Store authorization codes for OAuth authorization code flow
-        // In production, use Redis with short TTL (60 seconds)
+        // Auto-expire after 60 seconds via cleanup
         this.authCodes = new Map();
+
+        // Token expiration: 1 hour (ms)
+        this.TOKEN_TTL = 60 * 60 * 1000;
+        // Auth code expiration: 60 seconds (ms)
+        this.AUTH_CODE_TTL = 60 * 1000;
 
         this.setupToolHandlers();
         this.setupErrorHandling();
@@ -1228,9 +1234,33 @@ class YahooMailMCPServer {
         };
 
         process.on('SIGINT', async () => {
+            if (this.cleanupInterval) clearInterval(this.cleanupInterval);
             await this.server.close();
             process.exit(0);
         });
+    }
+
+    /**
+     * Periodically remove expired tokens and auth codes to prevent memory leaks
+     */
+    startCleanup() {
+        this.cleanupInterval = setInterval(() => {
+            const now = Date.now();
+
+            // Clean expired access tokens
+            for (const [token, entry] of this.validTokens) {
+                if (now - entry.createdAt > this.TOKEN_TTL) {
+                    this.validTokens.delete(token);
+                }
+            }
+
+            // Clean expired auth codes
+            for (const [code, data] of this.authCodes) {
+                if (now - data.created_at > this.AUTH_CODE_TTL) {
+                    this.authCodes.delete(code);
+                }
+            }
+        }, 10 * 60 * 1000); // Every 10 minutes
     }
 
     async run() {
@@ -1261,6 +1291,9 @@ class YahooMailMCPServer {
         console.error('[Server] Environment:', process.env.NODE_ENV || 'development');
         console.error('[Server] Email configured:', !!process.env.YAHOO_EMAIL);
         console.error('[Server] Password configured:', !!process.env.YAHOO_APP_PASSWORD);
+
+        // Start token/auth code cleanup
+        this.startCleanup();
 
         // Enable CORS for Claude.ai and remote MCP connections
         app.use(cors({
@@ -1330,8 +1363,10 @@ class YahooMailMCPServer {
 
             const token = authHeader.substring(7); // Remove 'Bearer ' prefix
 
-            // Validate token (check if it's in our valid tokens set)
-            if (!this.validTokens || !this.validTokens.has(token)) {
+            // Validate token (check if it's in our valid tokens map and not expired)
+            const tokenEntry = this.validTokens && this.validTokens.get(token);
+            if (!tokenEntry || (Date.now() - tokenEntry.createdAt > this.TOKEN_TTL)) {
+                if (tokenEntry) this.validTokens.delete(token);
                 console.error('[Auth] Invalid or expired access token');
                 return res.status(401).json({
                     error: 'invalid_token',
@@ -1427,14 +1462,22 @@ class YahooMailMCPServer {
                 return res.status(400).send('Unsupported response_type');
             }
 
-            // Validate redirect_uri (must be Claude's callback)
-            if (!redirect_uri || (!redirect_uri.includes('claude.ai') && !redirect_uri.includes('claude.com') && !redirect_uri.includes('localhost'))) {
-                console.error('[OAuth] Invalid redirect_uri:', redirect_uri);
+            // Validate redirect_uri (must be an allowed host)
+            const allowedRedirectHosts = ['claude.ai', 'claude.com', 'localhost', '127.0.0.1'];
+            let redirectHost;
+            try {
+                redirectHost = new URL(redirect_uri).hostname;
+            } catch {
+                console.error('[OAuth] Malformed redirect_uri:', redirect_uri);
+                return res.status(400).send('Invalid redirect_uri');
+            }
+            if (!allowedRedirectHosts.includes(redirectHost)) {
+                console.error('[OAuth] Disallowed redirect_uri host:', redirectHost);
                 return res.status(400).send('Invalid redirect_uri');
             }
 
             // Generate authorization code
-            const authCode = Buffer.from(`${client_id}:${Date.now()}:${Math.random()}`).toString('base64');
+            const authCode = crypto.randomBytes(32).toString('base64url');
 
             // Store auth code with PKCE challenge (in-memory - use Redis/DB in production)
             if (!this.authCodes) this.authCodes = new Map();
@@ -1512,9 +1555,18 @@ class YahooMailMCPServer {
 
                 const authData = this.authCodes.get(code);
 
+                // Check auth code expiration (60 seconds)
+                if (Date.now() - authData.created_at > this.AUTH_CODE_TTL) {
+                    this.authCodes.delete(code);
+                    console.error('[OAuth] Authorization code expired');
+                    return res.status(400).json({
+                        error: 'invalid_grant',
+                        error_description: 'Authorization code has expired'
+                    });
+                }
+
                 // Validate PKCE code verifier
                 if (authData.code_challenge) {
-                    const crypto = await import('crypto');
                     const hash = crypto.createHash('sha256').update(code_verifier).digest('base64url');
                     if (hash !== authData.code_challenge) {
                         console.error('[OAuth] PKCE validation failed');
@@ -1529,8 +1581,8 @@ class YahooMailMCPServer {
                 this.authCodes.delete(code);
 
                 // Generate access token
-                const accessToken = Buffer.from(`${reqClientId}:${Date.now()}:${Math.random()}`).toString('base64');
-                this.validTokens.add(accessToken);
+                const accessToken = crypto.randomBytes(32).toString('base64url');
+                this.validTokens.set(accessToken, { createdAt: Date.now() });
 
                 console.error('[OAuth] Access token generated from authorization code');
 
@@ -1545,8 +1597,8 @@ class YahooMailMCPServer {
             // Handle Client Credentials Grant
             if (grantType === 'client_credentials') {
                 // Generate access token
-                const accessToken = Buffer.from(`${clientId}:${Date.now()}:${Math.random()}`).toString('base64');
-                this.validTokens.add(accessToken);
+                const accessToken = crypto.randomBytes(32).toString('base64url');
+                this.validTokens.set(accessToken, { createdAt: Date.now() });
 
                 console.error('[OAuth] Access token generated via client credentials');
 
