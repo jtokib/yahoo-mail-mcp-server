@@ -2,7 +2,7 @@
 # Multi-stage build for optimized production image
 # Works on both Windows Docker Desktop and Linux Docker
 
-FROM node:18-alpine AS base
+FROM node:20-alpine AS base
 
 # Install dependencies needed for native modules
 RUN apk add --no-cache \
