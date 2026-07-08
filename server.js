@@ -683,7 +683,11 @@ class YahooMailMCPServer {
                     try {
                         const toDate = new Date(dateTo);
                         if (!isNaN(toDate.getTime())) {
-                            criteria.push(['BEFORE', toDate]);
+                            // IMAP's BEFORE is exclusive and day-granular (RFC 3501):
+                            // bump by one day so the given dateTo day is actually included.
+                            const beforeDate = new Date(toDate);
+                            beforeDate.setDate(beforeDate.getDate() + 1);
+                            criteria.push(['BEFORE', beforeDate]);
                         }
                     } catch (e) {
                         imap.end();
