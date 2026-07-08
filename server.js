@@ -385,14 +385,14 @@ class YahooMailMCPServer {
             const imap = new Imap({
                 user: process.env.YAHOO_EMAIL,
                 password: process.env.YAHOO_APP_PASSWORD,
-                host: 'imap.mail.yahoo.com',
+                host: process.env.IMAP_HOST || 'imap.mail.yahoo.com',
                 port: 993,
                 tls: true,
                 authTimeout: 30000,
                 connTimeout: 30000,
                 tlsOptions: {
                     rejectUnauthorized: true,
-                    servername: 'imap.mail.yahoo.com',
+                    servername: process.env.IMAP_HOST || 'imap.mail.yahoo.com',
                     minVersion: 'TLSv1.2'
                 }
             });

@@ -17,6 +17,7 @@ services:
       - PORT=3000
       - YAHOO_EMAIL=${YAHOO_EMAIL}
       - YAHOO_APP_PASSWORD=${YAHOO_APP_PASSWORD}
+      - IMAP_HOST=${IMAP_HOST:-imap.mail.yahoo.com}
     env_file:
       - .env
     restart: unless-stopped
