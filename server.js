@@ -2387,12 +2387,18 @@ class YahooMailMCPServer {
 
     /**
      * Helper: compress a sorted UID list into IMAP set notation.
-     * [1,2,3,7,9,10,11] becomes "1:3,7,9:11". Mail filed in bulk is usually
-     * contiguous, so this turns a command that would run to tens of kilobytes
-     * into one that fits comfortably inside a line.
+     * [1,2,3,7,9,10,11] becomes [ "1:3", 7, "9:11" ]. Mail filed in bulk is
+     * usually contiguous, so this turns a command that would run to tens of
+     * kilobytes into one that fits comfortably inside a line.
+     *
+     * Returns an ARRAY, never a joined string. node-imap validates each element
+     * of a UID list separately: a lone "a:b" range passes, but a comma-joined
+     * string like "1:29,31:59" fails the range test and is then silently
+     * parseInt-ed down to 1 - so the command would act on the wrong message and
+     * report success. Passing the array lets node-imap do the joining safely.
      */
     compressUidSet(uids) {
-        if (!uids.length) return '';
+        if (!uids.length) return [];
         const sorted = [...uids].sort((a, b) => a - b);
         const parts = [];
         let start = sorted[0];
@@ -2401,11 +2407,11 @@ class YahooMailMCPServer {
         for (let i = 1; i <= sorted.length; i++) {
             const uid = sorted[i];
             if (uid === prev + 1) { prev = uid; continue; }
-            parts.push(start === prev ? String(start) : `${start}:${prev}`);
+            parts.push(start === prev ? start : `${start}:${prev}`);
             start = uid;
             prev = uid;
         }
-        return parts.join(',');
+        return parts;
     }
 
     /**
@@ -2528,8 +2534,9 @@ class YahooMailMCPServer {
                     let started = 0;
                     let finished = 0;
                     let fetchDone = false;
+                    const expected = sampleUids.length;
                     const settle = () => {
-                        if (fetchDone && finished >= started) resolve(out);
+                        if (finished >= expected || (fetchDone && finished >= started)) resolve(out);
                     };
                     const f = imap.fetch(this.compressUidSet(sampleUids), {
                         bodies: 'HEADER.FIELDS (FROM SUBJECT DATE)', struct: false
@@ -2546,7 +2553,8 @@ class YahooMailMCPServer {
                         });
                     });
                     f.once('error', () => { fetchDone = true; resolve(out); });
-                    f.once('end', () => { fetchDone = true; settle(); });
+                    // Give any in-flight message a tick to finish before settling.
+                    f.once('end', () => { fetchDone = true; setTimeout(settle, 150); });
                     // Never hang the dry run on a sample that will not arrive.
                     setTimeout(() => resolve(out), 8000);
                 });
