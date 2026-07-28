@@ -2519,21 +2519,36 @@ class YahooMailMCPServer {
 
             if (confirm !== true) {
                 const sampleUids = selection.slice(0, 5);
+                // The fetch 'end' event can fire before every message's own 'end'
+                // has run, so resolving on it alone under-reports the sample - the
+                // same async race that once returned empty bodies from read_email.
+                // Count the messages in and wait for them out.
                 const sample = await new Promise((resolve) => {
                     const out = [];
+                    let started = 0;
+                    let finished = 0;
+                    let fetchDone = false;
+                    const settle = () => {
+                        if (fetchDone && finished >= started) resolve(out);
+                    };
                     const f = imap.fetch(this.compressUidSet(sampleUids), {
                         bodies: 'HEADER.FIELDS (FROM SUBJECT DATE)', struct: false
                     });
                     f.on('message', (msg) => {
+                        started++;
                         let hdr = '';
                         msg.on('body', (stream) => stream.on('data', c => hdr += c.toString('ascii')));
                         msg.once('end', () => {
                             const p = Imap.parseHeader(hdr);
                             out.push({ from: p.from?.[0] || '?', subject: p.subject?.[0] || '?', date: p.date?.[0] || '?' });
+                            finished++;
+                            settle();
                         });
                     });
-                    f.once('error', () => resolve(out));
-                    f.once('end', () => resolve(out));
+                    f.once('error', () => { fetchDone = true; resolve(out); });
+                    f.once('end', () => { fetchDone = true; settle(); });
+                    // Never hang the dry run on a sample that will not arrive.
+                    setTimeout(() => resolve(out), 8000);
                 });
                 imap.end();
 
