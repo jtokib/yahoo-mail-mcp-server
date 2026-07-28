@@ -7,10 +7,11 @@ A Model Context Protocol (MCP) server that provides full email management for Ya
 - **Secure OAuth 2.0 Authentication**: Protect your remote MCP server with OAuth 2.0 authorization code flow with PKCE
 - **UID-Based Operations**: Uses permanent IMAP UIDs that don't change when emails are deleted (v3.0.0+)
 - **Full Email Management**: Complete email operations with batch processing support
-- **Eleven Powerful Tools**:
+- **Outgoing Mail (v3.1.0+)**: Send, forward and reply over SMTP, with a confirm-first safety gate
+- **Seventeen Tools**:
   - `list_emails`: List recent emails with enriched metadata (size, flags, attachments) and pagination
-  - `read_email`: Read the full content of emails (batch support)
-  - `search_emails`: Advanced search with filters (date ranges, sender, unread status)
+  - `read_email`: Read the full content of emails (batch support), with `maxChars` truncation and `format` control
+  - `search_emails`: Advanced search with filters (date ranges, sender, unread, flagged, unanswered, has-attachment, full body text, multiple folders)
   - `list_folders`: Discover all available IMAP folders
   - `delete_emails`: Move emails to Trash (soft delete, recoverable)
   - `archive_emails`: Archive emails for long-term storage
@@ -19,6 +20,12 @@ A Model Context Protocol (MCP) server that provides full email management for Ya
   - `flag_emails`: Flag emails as important/starred
   - `unflag_emails`: Remove flag from emails
   - `move_emails`: Move emails to any folder
+  - `list_attachments`: Filename, MIME type, size and inline status for every attachment on a message
+  - `save_attachment`: Write one or all attachments to disk, with sanitised filenames
+  - `send_email`: Send a new message over SMTP (confirm-first)
+  - `forward_email`: Forward a message with its attachments intact, or as a whole `.eml` (confirm-first)
+  - `reply_to_email`: Reply with correct threading, setting `\Answered` on the original (confirm-first)
+  - `test_connection`: Verify IMAP and SMTP credentials and report the Sent folder in use
 - **Enriched Metadata**: All emails include UID, size, flags, hasAttachments, and folder information
 - **Advanced Search**: Filter by date range, sender, unread status, and search across any folder
 - **Batch Operations**: All management operations support processing multiple emails at once with accurate success/failure tracking
@@ -28,6 +35,36 @@ A Model Context Protocol (MCP) server that provides full email management for Ya
 - **Cross-Platform**: Works on both Windows and Linux development environments
 - **Docker Support**: Containerized deployment with Docker and Docker Compose
 - **Cloud Ready**: Configured for easy deployment to Render.com with OAuth security
+
+## What's new in 3.1.0
+
+### Outgoing mail
+
+The server now sends as well as reads. `send_email`, `forward_email` and `reply_to_email` submit over `smtp.mail.yahoo.com:465` using the **same app-specific password** already configured for IMAP, so no second credential is needed.
+
+**All three are confirm-first.** Called without `confirm: true` they send nothing and return a preview naming every recipient, the subject, the body and each attachment that would travel. Call again with `confirm: true` to actually send. This makes the tools safe to expose to an agent that is reasoning about a live mailbox.
+
+Three details worth knowing:
+
+- **Sent copies.** Yahoo does not file SMTP submissions into Sent automatically, so the server appends a copy over IMAP itself. Set `YAHOO_SENT_FOLDER` if your account names the folder unusually; otherwise it tries `Sent`, then `Sent Items`, then `INBOX.Sent`.
+- **Bcc handling.** The message is built twice when a Bcc is present. The copy on the wire carries no Bcc header, so blind recipients stay blind, while the envelope still routes to them and the copy filed in Sent keeps the header for the record. A single Message-ID is fixed up front so both copies match.
+- **Threading.** `reply_to_email` sets `In-Reply-To` and `References` from the original, and flags the original `\Answered`, which keeps the `unansweredOnly` search filter truthful.
+
+### Attachments
+
+`list_attachments` returns filename, MIME type, size, inline flag and a `looksLikeDocument` hint for each part, which is what you need to judge whether a message is a genuine receipt or invoice before acting on it. `save_attachment` writes to `YAHOO_ATTACHMENT_DIR` (default `~/Downloads`) with filenames sanitised, so a hostile attachment name cannot steer the write.
+
+The underlying `hasAttachments` detection was rewritten at the same time. The previous version only matched a lowercase `disposition.type === 'attachment'`, so it missed parts that carry only a `name` parameter and parts whose disposition arrives in a different case - both common in real mail.
+
+### Search and output
+
+`search_emails` gained `bodyQuery` (IMAP `TEXT`, so the body is searched rather than just headers), `flaggedOnly`, `unansweredOnly`, `hasAttachment`, and `folders` for searching several mailboxes in one call. Because IMAP has no attachment criterion, `hasAttachment` filters after a widened scan and the response reports `scanned` alongside `returned`, so partial coverage is visible rather than assumed.
+
+`read_email` gained `maxChars` (default 20000, `0` for unlimited) and `format` (`full`, `summary`, `headers`). Long HTML newsletters now truncate with an explicit marker instead of consuming an entire context window.
+
+### A note on dotenv
+
+This release pins `dotenv` to `^16`. Version 17 prints an informational banner to **stdout**, which corrupts the JSON-RPC stream in stdio transport mode. If you upgrade, pass `{ quiet: true }` to `dotenv.config()`.
 
 ## Prerequisites
 

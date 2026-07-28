@@ -11,6 +11,10 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import Imap from 'imap';
 import { simpleParser } from 'mailparser';
+import nodemailer from 'nodemailer';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -95,6 +99,17 @@ class YahooMailMCPServer {
                                     type: 'string',
                                     description: 'Folder containing the emails (default: INBOX)',
                                     default: 'INBOX'
+                                },
+                                maxChars: {
+                                    type: 'number',
+                                    description: 'Maximum characters of body text returned per email (default: 20000, 0 for unlimited). Long newsletters are truncated with a marker so a single read cannot exhaust the context budget.',
+                                    default: 20000
+                                },
+                                format: {
+                                    type: 'string',
+                                    enum: ['full', 'summary', 'headers'],
+                                    description: 'full = headers plus body (default); summary = headers plus the first 500 characters; headers = metadata only, no body.',
+                                    default: 'full'
                                 }
                             },
                             required: ['uids']
@@ -140,6 +155,31 @@ class YahooMailMCPServer {
                                     type: 'string',
                                     description: 'Folder to search in (default: INBOX). Use list_folders to see available folders.',
                                     default: 'INBOX'
+                                },
+                                folders: {
+                                    type: 'array',
+                                    items: { type: 'string' },
+                                    description: 'Search several folders in one call, for example ["INBOX","_Tax","_Trust","_Work Expense"]. Overrides "folder". Each result carries the folder it came from.'
+                                },
+                                bodyQuery: {
+                                    type: 'string',
+                                    description: 'Search the full message text (body as well as headers) for this term, using the IMAP TEXT criterion.',
+                                    default: null
+                                },
+                                flaggedOnly: {
+                                    type: 'boolean',
+                                    description: 'Only return flagged (starred) emails.',
+                                    default: false
+                                },
+                                unansweredOnly: {
+                                    type: 'boolean',
+                                    description: 'Only return emails without the \\Answered flag - the standing signal for mail from priority senders that still needs a reply.',
+                                    default: false
+                                },
+                                hasAttachment: {
+                                    type: 'boolean',
+                                    description: 'Only return emails carrying an attachment. Applied after the IMAP search over a widened scan window; the response reports how many messages were scanned.',
+                                    default: false
                                 }
                             },
                             required: []
@@ -303,6 +343,170 @@ class YahooMailMCPServer {
                             type: 'object',
                             properties: {}
                         }
+                    },
+                    {
+                        name: 'list_attachments',
+                        description: 'List the attachments on one or more emails: filename, MIME type, size, and whether the part is inline. Use this to judge whether a message is a genuine receipt or invoice before acting on it - read_email only reports a yes/no flag.',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                uids: {
+                                    type: 'array',
+                                    items: { type: 'number' },
+                                    description: 'Array of UIDs to inspect.',
+                                    minItems: 1
+                                },
+                                folder: {
+                                    type: 'string',
+                                    description: 'Folder containing the emails (default: INBOX)',
+                                    default: 'INBOX'
+                                }
+                            },
+                            required: ['uids']
+                        }
+                    },
+                    {
+                        name: 'save_attachment',
+                        description: 'Save one or all attachments from an email to disk and return the absolute paths. Defaults to the YAHOO_ATTACHMENT_DIR directory, or ~/Downloads.',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                uid: {
+                                    type: 'number',
+                                    description: 'UID of the email holding the attachment.'
+                                },
+                                folder: {
+                                    type: 'string',
+                                    description: 'Folder containing the email (default: INBOX)',
+                                    default: 'INBOX'
+                                },
+                                filename: {
+                                    type: 'string',
+                                    description: 'Save only the attachment with this filename. Omit to use index, or set all=true.',
+                                    default: null
+                                },
+                                index: {
+                                    type: 'number',
+                                    description: 'Save only the attachment at this zero-based index (order as returned by list_attachments).',
+                                    default: null
+                                },
+                                all: {
+                                    type: 'boolean',
+                                    description: 'Save every attachment on the message (default: false).',
+                                    default: false
+                                },
+                                outputDir: {
+                                    type: 'string',
+                                    description: 'Directory to write into. Defaults to YAHOO_ATTACHMENT_DIR or ~/Downloads.',
+                                    default: null
+                                }
+                            },
+                            required: ['uid']
+                        }
+                    },
+                    {
+                        name: 'send_email',
+                        description: 'Send a new email from the connected Yahoo account over SMTP. SAFETY: without confirm=true this sends nothing and returns a preview of exactly what would go out. Call once to preview, show the preview to the user, then call again with confirm=true.',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                to: {
+                                    type: 'string',
+                                    description: 'Recipient address, or several separated by commas.'
+                                },
+                                subject: { type: 'string', description: 'Subject line.' },
+                                body: { type: 'string', description: 'Plain text body.' },
+                                html: { type: 'string', description: 'Optional HTML body.', default: null },
+                                cc: { type: 'string', description: 'Optional CC recipients, comma separated.', default: null },
+                                bcc: { type: 'string', description: 'Optional BCC recipients, comma separated.', default: null },
+                                confirm: {
+                                    type: 'boolean',
+                                    description: 'Must be true to actually send. False or absent returns a preview only.',
+                                    default: false
+                                },
+                                saveToSent: {
+                                    type: 'boolean',
+                                    description: 'Append a copy to the Sent folder over IMAP (default: true). Yahoo does not do this automatically for SMTP submissions.',
+                                    default: true
+                                }
+                            },
+                            required: ['to', 'subject', 'body']
+                        }
+                    },
+                    {
+                        name: 'forward_email',
+                        description: 'Forward an existing email, attachments preserved, to another address. Built for receipt routing: forward a receipt that landed in Yahoo to an expense inbox without leaving the tool. SAFETY: without confirm=true nothing is sent and a preview is returned, listing every attachment that would travel with it.',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                uid: { type: 'number', description: 'UID of the email to forward.' },
+                                to: { type: 'string', description: 'Recipient address, or several separated by commas.' },
+                                folder: {
+                                    type: 'string',
+                                    description: 'Folder containing the email (default: INBOX)',
+                                    default: 'INBOX'
+                                },
+                                note: {
+                                    type: 'string',
+                                    description: 'Optional text placed above the forwarded message.',
+                                    default: ''
+                                },
+                                mode: {
+                                    type: 'string',
+                                    enum: ['attachments', 'eml'],
+                                    description: 'attachments (default) re-attaches each original attachment and inlines the original text. eml attaches the whole original message as a .eml file, which preserves it byte for byte.',
+                                    default: 'attachments'
+                                },
+                                confirm: {
+                                    type: 'boolean',
+                                    description: 'Must be true to actually send. False or absent returns a preview only.',
+                                    default: false
+                                },
+                                saveToSent: { type: 'boolean', description: 'Append a copy to the Sent folder (default: true).', default: true }
+                            },
+                            required: ['uid', 'to']
+                        }
+                    },
+                    {
+                        name: 'reply_to_email',
+                        description: 'Reply to an email, threading correctly via In-Reply-To and References, and setting the \\Answered flag on the original so unansweredOnly searches stay accurate. SAFETY: without confirm=true nothing is sent and a preview is returned.',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                uid: { type: 'number', description: 'UID of the email to reply to.' },
+                                body: { type: 'string', description: 'Plain text reply body.' },
+                                folder: {
+                                    type: 'string',
+                                    description: 'Folder containing the email (default: INBOX)',
+                                    default: 'INBOX'
+                                },
+                                replyAll: {
+                                    type: 'boolean',
+                                    description: 'Include the original To and Cc recipients (default: false).',
+                                    default: false
+                                },
+                                quoteOriginal: {
+                                    type: 'boolean',
+                                    description: 'Append the quoted original message below the reply (default: true).',
+                                    default: true
+                                },
+                                confirm: {
+                                    type: 'boolean',
+                                    description: 'Must be true to actually send. False or absent returns a preview only.',
+                                    default: false
+                                },
+                                saveToSent: { type: 'boolean', description: 'Append a copy to the Sent folder (default: true).', default: true }
+                            },
+                            required: ['uid', 'body']
+                        }
+                    },
+                    {
+                        name: 'test_connection',
+                        description: 'Check that IMAP and SMTP both authenticate with the configured Yahoo app password, and report the resolved Sent folder. Run this first when the mail tools misbehave.',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {}
+                        }
                     }
                 ]
             };
@@ -318,17 +522,29 @@ class YahooMailMCPServer {
                         return await this.listEmails(args?.count || 10, args?.folder || 'INBOX', args?.offset || 0);
 
                     case 'read_email':
-                        return await this.readEmail(args.uids, args.folder);
+                        return await this.readEmail(args.uids, args.folder, {
+                            maxChars: args?.maxChars === undefined ? 20000 : args.maxChars,
+                            format: args?.format || 'full'
+                        });
 
-                    case 'search_emails':
-                        return await this.searchEmails(args?.query || '', {
+                    case 'search_emails': {
+                        const searchOptions = {
                             count: args?.count || 10,
                             dateFrom: args?.dateFrom || null,
                             dateTo: args?.dateTo || null,
                             sender: args?.sender || null,
                             unreadOnly: args?.unreadOnly || false,
-                            folder: args?.folder || 'INBOX'
-                        });
+                            folder: args?.folder || 'INBOX',
+                            bodyQuery: args?.bodyQuery || null,
+                            flaggedOnly: args?.flaggedOnly || false,
+                            unansweredOnly: args?.unansweredOnly || false,
+                            hasAttachment: args?.hasAttachment || false
+                        };
+                        if (Array.isArray(args?.folders) && args.folders.length > 0) {
+                            return await this.searchEmailsMulti(args?.query || '', args.folders, searchOptions);
+                        }
+                        return await this.searchEmails(args?.query || '', searchOptions);
+                    }
 
                     case 'delete_emails':
                         return await this.deleteEmails(args.uids, args.folder);
@@ -353,6 +569,24 @@ class YahooMailMCPServer {
 
                     case 'list_folders':
                         return await this.listFolders();
+
+                    case 'list_attachments':
+                        return await this.listAttachments(args.uids, args?.folder || 'INBOX');
+
+                    case 'save_attachment':
+                        return await this.saveAttachment(args);
+
+                    case 'send_email':
+                        return await this.sendEmail(args);
+
+                    case 'forward_email':
+                        return await this.forwardEmail(args);
+
+                    case 'reply_to_email':
+                        return await this.replyToEmail(args);
+
+                    case 'test_connection':
+                        return await this.testConnection();
 
                     default:
                         throw new Error(`Unknown tool: ${name}`);
@@ -597,13 +831,13 @@ class YahooMailMCPServer {
     /**
      * Read specific emails by UIDs (supports batch reading)
      */
-    async readEmail(uids, folder = 'INBOX') {
+    async readEmail(uids, folder = 'INBOX', options = {}) {
         // Support both single number and array for backward compatibility
         if (!Array.isArray(uids)) {
             uids = [uids];
         }
 
-        return this.readEmails(uids, folder);
+        return this.readEmails(uids, folder, options);
     }
 
     /**
@@ -616,7 +850,11 @@ class YahooMailMCPServer {
             dateTo = null,
             sender = null,
             unreadOnly = false,
-            folder = 'INBOX'
+            folder = 'INBOX',
+            bodyQuery = null,
+            flaggedOnly = false,
+            unansweredOnly = false,
+            hasAttachment = false
         } = options;
 
         // Validate query parameter (allow empty for date-only searches)
@@ -693,9 +931,24 @@ class YahooMailMCPServer {
                     }
                 }
 
+                // Full-text body search
+                if (bodyQuery && bodyQuery.trim().length > 0) {
+                    criteria.push(['TEXT', bodyQuery]);
+                }
+
                 // Unread only filter
                 if (unreadOnly) {
                     criteria.push('UNSEEN');
+                }
+
+                // Flagged (starred) only
+                if (flaggedOnly) {
+                    criteria.push('FLAGGED');
+                }
+
+                // Unanswered only - the standing reply-needed signal
+                if (unansweredOnly) {
+                    criteria.push('UNANSWERED');
                 }
 
                 // If no criteria, search all
@@ -728,8 +981,11 @@ class YahooMailMCPServer {
                         return;
                     }
 
-                    // Get the most recent results (UIDs are already sorted)
-                    const limitedResults = results.slice(-count);
+                    // Get the most recent results (UIDs are already sorted).
+                    // When filtering on attachments the IMAP search cannot help, so widen
+                    // the scan window and filter after the fetch.
+                    const scanWindow = hasAttachment ? Math.min(results.length, Math.max(count * 10, 50)) : count;
+                    const limitedResults = results.slice(-scanWindow);
 
                     // Fetch details for these UIDs
                     const fetch = imap.fetch(limitedResults, {
@@ -780,13 +1036,19 @@ class YahooMailMCPServer {
                         // Sort by UID (newest first typically)
                         emails.sort((a, b) => b.uid - a.uid);
 
+                        let output = emails;
+                        if (hasAttachment) {
+                            output = emails.filter(e => e.hasAttachments).slice(0, count);
+                        }
+
                         resolve({
                             content: [{
                                 type: 'text',
                                 text: JSON.stringify({
-                                    emails: emails,
+                                    emails: output,
                                     totalMatches: results.length,
-                                    returned: emails.length,
+                                    scanned: emails.length,
+                                    returned: output.length,
                                     query: query,
                                     filters: options,
                                     folder: folder
@@ -907,7 +1169,7 @@ class YahooMailMCPServer {
     /**
      * Helper method for reading multiple emails using UIDs
      */
-    async readEmails(uids, folder = 'INBOX') {
+    async readEmails(uids, folder = 'INBOX', options = {}) {
         // Validate input
         const validationError = this.validateUIDs(uids);
         if (validationError) {
@@ -978,6 +1240,7 @@ class YahooMailMCPServer {
                                     size: attrs.size || 0,
                                     flags: attrs.flags || [],
                                     hasAttachments: this.hasAttachments(attrs.struct),
+                                    attachmentNames: (parsed.attachments || []).map(a => a.filename || '(unnamed)'),
                                     content: parsed.text || htmlAsText || 'No content available'
                                 });
                             })
@@ -1013,18 +1276,37 @@ class YahooMailMCPServer {
                     emails.sort((a, b) => a.uid - b.uid);
 
                     // Format output
-                    const emailContent = emails.map(email =>
-                        `📧 Email UID: ${email.uid} (Seq #${email.sequenceNumber})\n\n` +
-                        `From: ${email.from}\n` +
-                        `To: ${email.to}\n` +
-                        `Subject: ${email.subject}\n` +
-                        `Date: ${email.date}\n` +
-                        `Size: ${email.size} bytes\n` +
-                        `Flags: ${email.flags.join(', ') || 'None'}\n` +
-                        `Has Attachments: ${email.hasAttachments ? 'Yes' : 'No'}\n\n` +
-                        `--- Content ---\n` +
-                        `${email.content}`
-                    ).join('\n\n' + '='.repeat(80) + '\n\n');
+                    const format = options.format || 'full';
+                    const rawMax = options.maxChars === undefined ? 20000 : Number(options.maxChars);
+                    const limit = format === 'summary' ? 500 : (rawMax > 0 ? rawMax : Infinity);
+
+                    const emailContent = emails.map(email => {
+                        const attachLine = email.hasAttachments
+                            ? `Yes (${email.attachmentNames.join(', ') || 'names unavailable'}) - use list_attachments for types and sizes`
+                            : 'No';
+                        const head =
+                            `📧 Email UID: ${email.uid} (Seq #${email.sequenceNumber})\n\n` +
+                            `From: ${email.from}\n` +
+                            `To: ${email.to}\n` +
+                            `Subject: ${email.subject}\n` +
+                            `Date: ${email.date}\n` +
+                            `Size: ${email.size} bytes\n` +
+                            `Flags: ${email.flags.join(', ') || 'None'}\n` +
+                            `Answered: ${email.flags.includes('\\Answered') ? 'Yes' : 'No'}\n` +
+                            `Has Attachments: ${attachLine}`;
+
+                        if (format === 'headers') {
+                            return head;
+                        }
+
+                        const full = email.content || '';
+                        const shown = full.length > limit ? full.slice(0, limit) : full;
+                        const truncNote = full.length > limit
+                            ? `\n\n[... truncated: showing ${shown.length} of ${full.length} characters. Re-read with a higher maxChars, or maxChars=0 for the whole body ...]`
+                            : '';
+
+                        return head + `\n\n--- Content ---\n` + shown + truncNote;
+                    }).join('\n\n' + '='.repeat(80) + '\n\n');
 
                     resolve({
                         content: [{
@@ -1125,26 +1407,50 @@ class YahooMailMCPServer {
      * Helper: Detect if email has attachments from BODYSTRUCTURE
      */
     hasAttachments(struct) {
-        if (!struct || !Array.isArray(struct)) return false;
+        return this.extractAttachmentParts(struct).some(p => !p.inline);
+    }
 
-        // Recursive check for attachment disposition
-        const checkPart = (part) => {
-            if (!part) return false;
+    /**
+     * Helper: walk an IMAP BODYSTRUCTURE and pull out every part that looks like
+     * a file. Handles case-insensitive disposition types and parts that carry only
+     * a name parameter, both of which the earlier disposition==='attachment' check
+     * missed - which mattered because receipt detection depends on it.
+     */
+    extractAttachmentParts(struct) {
+        const found = [];
 
-            // Check if this part is an attachment
-            if (part.disposition && part.disposition.type === 'attachment') {
-                return true;
+        const walk = (node) => {
+            if (!node) return;
+            if (Array.isArray(node)) {
+                node.forEach(walk);
+                return;
             }
+            if (typeof node !== 'object') return;
 
-            // Recursively check sub-parts
-            if (Array.isArray(part)) {
-                return part.some(p => checkPart(p));
-            }
+            const type = node.type ? String(node.type).toLowerCase() : '';
+            if (type === 'multipart') return;
 
-            return false;
+            const disp = node.disposition || null;
+            const dispType = disp && disp.type ? String(disp.type).toLowerCase() : null;
+            const dispParams = (disp && disp.params) || {};
+            const partParams = node.params || {};
+            const filename = dispParams.filename || dispParams.FILENAME ||
+                             partParams.name || partParams.NAME || null;
+
+            const isAttachment = dispType === 'attachment' || (filename && dispType !== null) ||
+                                 (filename && type !== 'text');
+            if (!isAttachment) return;
+
+            found.push({
+                filename: filename || '(unnamed)',
+                contentType: node.subtype ? `${type}/${String(node.subtype).toLowerCase()}` : type,
+                size: node.size || 0,
+                inline: dispType === 'inline'
+            });
         };
 
-        return checkPart(struct);
+        walk(struct);
+        return found;
     }
 
     /**
@@ -1234,6 +1540,679 @@ class YahooMailMCPServer {
                 });
             });
         });
+    }
+
+
+    // =====================================================================
+    // Shared helpers for the send, forward, reply and attachment tools
+    // =====================================================================
+
+    /**
+     * Helper: wrap plain text in the MCP tool result envelope
+     */
+    textResult(text) {
+        return { content: [{ type: 'text', text }] };
+    }
+
+    /**
+     * Helper: resolve SMTP configuration from the environment.
+     * Yahoo accepts the same app-specific password on SMTP as on IMAP.
+     */
+    getSmtpConfig() {
+        const user = process.env.YAHOO_EMAIL;
+        const pass = process.env.YAHOO_APP_PASSWORD;
+        if (!user || !pass) {
+            throw new Error('YAHOO_EMAIL or YAHOO_APP_PASSWORD environment variables are not set');
+        }
+        return {
+            host: process.env.YAHOO_SMTP_HOST || 'smtp.mail.yahoo.com',
+            port: Number(process.env.YAHOO_SMTP_PORT || 465),
+            secure: true,
+            auth: { user, pass },
+            connectionTimeout: 30000,
+            greetingTimeout: 30000,
+            socketTimeout: 60000,
+            tls: { minVersion: 'TLSv1.2' }
+        };
+    }
+
+    createSmtpTransport() {
+        return nodemailer.createTransport(this.getSmtpConfig());
+    }
+
+    /**
+     * Helper: build the complete RFC822 message up front.
+     * Building first, then sending the built bytes, means the copy appended to
+     * Sent is byte-identical to what the recipient receives.
+     */
+    async buildRawMessage(message) {
+        const builder = nodemailer.createTransport({
+            streamTransport: true,
+            buffer: true,
+            newline: 'windows'
+        });
+        const info = await builder.sendMail(message);
+        return {
+            raw: info.message,
+            envelope: info.envelope,
+            messageId: info.messageId
+        };
+    }
+
+    /**
+     * Helper: build, submit and file a message.
+     *
+     * The message is built twice whenever a Bcc is present. Nodemailer keeps the
+     * Bcc header in raw output, so submitting that raw copy would show every blind
+     * recipient to everyone on the message. The wire copy therefore carries no Bcc
+     * header while the envelope still routes to the blind recipients, and the copy
+     * filed in Sent keeps the Bcc header so the record stays complete. A single
+     * Message-ID is fixed up front so both copies match.
+     */
+    async deliverMessage(message, saveToSent = true) {
+        const domain = String(message.from || '').split('@')[1] || 'yahoo.com';
+        if (!message.messageId) {
+            message.messageId = `<${globalThis.crypto.randomUUID()}@${domain}>`;
+        }
+
+        const archiveCopy = await this.buildRawMessage(message);
+        const wireCopy = message.bcc
+            ? await this.buildRawMessage({ ...message, bcc: undefined })
+            : archiveCopy;
+
+        const transport = this.createSmtpTransport();
+        let info;
+        try {
+            info = await transport.sendMail({ raw: wireCopy.raw, envelope: archiveCopy.envelope });
+        } finally {
+            transport.close();
+        }
+
+        const sentNote = saveToSent === false
+            ? 'Sent copy skipped'
+            : await this.appendToSent(archiveCopy.raw);
+
+        return {
+            messageId: archiveCopy.messageId,
+            response: info.response || 'accepted',
+            recipients: (archiveCopy.envelope.to || []).join(', '),
+            sentNote
+        };
+    }
+
+    /**
+     * Helper: append a sent message to the Sent folder.
+     * Yahoo does not file SMTP submissions automatically, so without this a
+     * message sent through the tool would be invisible in the web client.
+     * Never throws - a failed copy must not look like a failed send.
+     */
+    async appendToSent(raw) {
+        const configured = process.env.YAHOO_SENT_FOLDER || null;
+        const candidates = configured ? [configured] : ['Sent', 'Sent Items', 'INBOX.Sent'];
+
+        for (const mailbox of candidates) {
+            try {
+                const imap = await this.createImapConnection();
+                const result = await new Promise((resolve) => {
+                    imap.append(raw, { mailbox, flags: ['\\Seen'] }, (err) => {
+                        imap.end();
+                        resolve(err ? { ok: false, error: err.message } : { ok: true, mailbox });
+                    });
+                });
+                if (result.ok) return `copy saved to "${result.mailbox}"`;
+            } catch (err) {
+                return `copy not saved (${err.message})`;
+            }
+        }
+        return `copy not saved (no writable Sent folder found; set YAHOO_SENT_FOLDER)`;
+    }
+
+    /**
+     * Helper: fetch and parse a single message by UID
+     */
+    async fetchMessage(uid, folder = 'INBOX') {
+        if (typeof uid !== 'number' || !Number.isInteger(uid) || uid <= 0) {
+            throw new Error('uid must be a positive integer');
+        }
+
+        const imap = await this.createImapConnection();
+
+        return new Promise((resolve, reject) => {
+            imap.openBox(folder, true, (err) => {
+                if (err) {
+                    imap.end();
+                    reject(new Error(`Failed to open folder "${folder}": ${err.message}`));
+                    return;
+                }
+
+                const fetch = imap.fetch(String(uid), { bodies: '', struct: true, size: true });
+                const chunks = [];
+                let attrs = null;
+                let found = false;
+
+                fetch.on('message', (msg) => {
+                    found = true;
+                    msg.on('body', (stream) => {
+                        stream.on('data', (chunk) => chunks.push(chunk));
+                    });
+                    msg.once('attributes', (attributes) => { attrs = attributes; });
+                });
+
+                fetch.once('error', (fetchErr) => {
+                    imap.end();
+                    reject(fetchErr);
+                });
+
+                fetch.once('end', async () => {
+                    imap.end();
+                    if (!found) {
+                        reject(new Error(`UID ${uid} not found in folder "${folder}". It may have been moved or deleted.`));
+                        return;
+                    }
+                    try {
+                        const raw = Buffer.concat(chunks);
+                        const parsed = await simpleParser(raw);
+                        resolve({ uid, attrs, raw, parsed });
+                    } catch (parseErr) {
+                        reject(new Error(`Failed to parse UID ${uid}: ${parseErr.message}`));
+                    }
+                });
+            });
+        });
+    }
+
+    /**
+     * Helper: human readable byte size
+     */
+    formatBytes(bytes) {
+        const n = Number(bytes) || 0;
+        if (n < 1024) return `${n} B`;
+        if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+        return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+    }
+
+    /**
+     * Helper: strip any directory component from an attachment filename.
+     * Attachment filenames arrive from outside and must never steer a write.
+     */
+    safeFilename(name, fallback = 'attachment.bin') {
+        const base = path.basename(String(name || '').replace(/[\\/]/g, '_')).trim();
+        const cleaned = base.replace(/[^A-Za-z0-9 ._()+,#&@'\[\]{}-]/g, '_');
+        return cleaned && cleaned !== '.' && cleaned !== '..' ? cleaned : fallback;
+    }
+
+    /**
+     * Helper: render a send preview. Every send tool returns one of these when
+     * confirm is not true, so nothing leaves the mailbox unreviewed.
+     */
+    previewResult(action, fields, attachments = []) {
+        const lines = [
+            `PREVIEW ONLY - nothing has been sent.`,
+            ``,
+            `Action: ${action}`,
+            ...Object.entries(fields)
+                .filter(([, v]) => v !== null && v !== undefined && v !== '')
+                .map(([k, v]) => `${k}: ${v}`)
+        ];
+
+        if (attachments.length > 0) {
+            lines.push(``, `Attachments that would travel with it (${attachments.length}):`);
+            attachments.forEach((a, i) => {
+                lines.push(`  ${i + 1}. ${a.filename} - ${a.contentType} - ${this.formatBytes(a.size)}`);
+            });
+        } else {
+            lines.push(``, `Attachments: none`);
+        }
+
+        lines.push(``, `To send this, call the same tool again with confirm: true.`);
+        return this.textResult(lines.join('\n'));
+    }
+
+    /**
+     * Helper: address list to a comma separated string, dropping our own address
+     */
+    addressListToString(addressObject, exclude = []) {
+        if (!addressObject || !Array.isArray(addressObject.value)) return '';
+        const excludeLower = exclude.filter(Boolean).map(e => String(e).toLowerCase());
+        return addressObject.value
+            .filter(a => a.address && !excludeLower.includes(String(a.address).toLowerCase()))
+            .map(a => (a.name ? `"${a.name}" <${a.address}>` : a.address))
+            .join(', ');
+    }
+
+    /**
+     * Helper: quote an original message under a reply or forward
+     */
+    quoteOriginalText(parsed, style = 'reply') {
+        const header = [
+            `From: ${parsed.from?.text || 'Unknown'}`,
+            `Date: ${parsed.date ? new Date(parsed.date).toString() : 'Unknown'}`,
+            `Subject: ${parsed.subject || '(no subject)'}`,
+            `To: ${parsed.to?.text || 'Unknown'}`
+        ];
+        if (parsed.cc?.text) header.push(`Cc: ${parsed.cc.text}`);
+
+        const bodyText = parsed.text ||
+            (parsed.html ? parsed.html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() : '') ||
+            '(no text content)';
+
+        if (style === 'forward') {
+            return [
+                '',
+                '---------- Forwarded message ----------',
+                ...header,
+                '',
+                bodyText
+            ].join('\n');
+        }
+
+        const quoted = bodyText.split('\n').map(l => `> ${l}`).join('\n');
+        return ['', `On ${parsed.date ? new Date(parsed.date).toString() : 'an earlier date'}, ${parsed.from?.text || 'the sender'} wrote:`, quoted].join('\n');
+    }
+
+    // =====================================================================
+    // Attachment tools
+    // =====================================================================
+
+    /**
+     * List attachments on one or more emails
+     */
+    async listAttachments(uids, folder = 'INBOX') {
+        if (!Array.isArray(uids)) uids = [uids];
+        const validationError = this.validateUIDs(uids);
+        if (validationError) return this.textResult(`Error: ${validationError}`);
+
+        const results = [];
+        for (const uid of uids) {
+            try {
+                const { parsed, attrs } = await this.fetchMessage(uid, folder);
+                const attachments = (parsed.attachments || []).map((a, index) => ({
+                    index,
+                    filename: a.filename || '(unnamed)',
+                    contentType: a.contentType || 'application/octet-stream',
+                    size: a.size || (a.content ? a.content.length : 0),
+                    sizeHuman: this.formatBytes(a.size || (a.content ? a.content.length : 0)),
+                    inline: a.contentDisposition === 'inline',
+                    contentId: a.cid || null,
+                    looksLikeDocument: /^(application\/pdf|image\/|application\/vnd\.|application\/msword|text\/csv)/i.test(a.contentType || '')
+                }));
+
+                results.push({
+                    uid,
+                    folder,
+                    subject: parsed.subject || '(no subject)',
+                    from: parsed.from?.text || 'Unknown',
+                    date: parsed.date || null,
+                    flags: attrs?.flags || [],
+                    attachmentCount: attachments.length,
+                    documentCount: attachments.filter(a => a.looksLikeDocument && !a.inline).length,
+                    attachments
+                });
+            } catch (err) {
+                results.push({ uid, folder, error: err.message });
+            }
+        }
+
+        return this.textResult(JSON.stringify({ results, count: results.length }, null, 2));
+    }
+
+    /**
+     * Save attachments to disk
+     */
+    async saveAttachment(args = {}) {
+        const {
+            uid,
+            folder = 'INBOX',
+            filename = null,
+            index = null,
+            all = false,
+            outputDir = null
+        } = args;
+
+        if (typeof uid !== 'number') {
+            return this.textResult('Error: uid is required and must be a number');
+        }
+        if (!all && filename === null && index === null) {
+            return this.textResult('Error: provide filename, index, or all=true. Use list_attachments to see what is available.');
+        }
+
+        const targetDir = outputDir || process.env.YAHOO_ATTACHMENT_DIR || path.join(os.homedir(), 'Downloads');
+
+        let message;
+        try {
+            message = await this.fetchMessage(uid, folder);
+        } catch (err) {
+            return this.textResult(`Error: ${err.message}`);
+        }
+
+        const attachments = message.parsed.attachments || [];
+        if (attachments.length === 0) {
+            return this.textResult(`UID ${uid} has no attachments.`);
+        }
+
+        let selected;
+        if (all) {
+            selected = attachments.map((a, i) => ({ a, i }));
+        } else if (index !== null) {
+            if (index < 0 || index >= attachments.length) {
+                return this.textResult(`Error: index ${index} out of range - UID ${uid} has ${attachments.length} attachment(s).`);
+            }
+            selected = [{ a: attachments[index], i: index }];
+        } else {
+            const matchIndex = attachments.findIndex(a => a.filename === filename);
+            if (matchIndex === -1) {
+                const names = attachments.map(a => a.filename || '(unnamed)').join(', ');
+                return this.textResult(`Error: no attachment named "${filename}" on UID ${uid}. Available: ${names}`);
+            }
+            selected = [{ a: attachments[matchIndex], i: matchIndex }];
+        }
+
+        try {
+            fs.mkdirSync(targetDir, { recursive: true });
+        } catch (err) {
+            return this.textResult(`Error: cannot create output directory "${targetDir}": ${err.message}`);
+        }
+
+        const saved = [];
+        for (const { a, i } of selected) {
+            const base = this.safeFilename(a.filename, `uid${uid}-attachment${i}.bin`);
+            let target = path.join(targetDir, base);
+            let counter = 1;
+            const ext = path.extname(base);
+            const stem = base.slice(0, base.length - ext.length);
+            while (fs.existsSync(target)) {
+                target = path.join(targetDir, `${stem} (${counter})${ext}`);
+                counter += 1;
+            }
+            try {
+                fs.writeFileSync(target, a.content);
+                saved.push({ index: i, filename: a.filename || '(unnamed)', path: target, bytes: a.content.length, contentType: a.contentType });
+            } catch (err) {
+                saved.push({ index: i, filename: a.filename || '(unnamed)', error: err.message });
+            }
+        }
+
+        return this.textResult(JSON.stringify({ uid, folder, outputDir: targetDir, saved }, null, 2));
+    }
+
+    // =====================================================================
+    // Send, forward and reply
+    // =====================================================================
+
+    async sendEmail(args = {}) {
+        const {
+            to,
+            subject,
+            body,
+            html = null,
+            cc = null,
+            bcc = null,
+            confirm = false,
+            saveToSent = true
+        } = args;
+
+        if (!to || String(to).trim() === '') return this.textResult('Error: "to" is required');
+        if (subject === undefined || subject === null) return this.textResult('Error: "subject" is required');
+        if ((!body || String(body).trim() === '') && !html) return this.textResult('Error: "body" (or "html") is required');
+
+        const from = process.env.YAHOO_EMAIL;
+        if (!from) return this.textResult('Error: YAHOO_EMAIL environment variable is not set');
+
+        if (confirm !== true) {
+            return this.previewResult('send_email', {
+                From: from,
+                To: to,
+                Cc: cc,
+                Bcc: bcc,
+                Subject: subject,
+                Body: `\n${body || '(HTML only)'}`
+            });
+        }
+
+        const message = { from, to, subject, text: body };
+        if (html) message.html = html;
+        if (cc) message.cc = cc;
+        if (bcc) message.bcc = bcc;
+
+        const sent = await this.deliverMessage(message, saveToSent);
+
+        return this.textResult(
+            `Sent.\n\nTo: ${to}\nEnvelope recipients: ${sent.recipients}\nSubject: ${subject}\nMessage-ID: ${sent.messageId}\nSMTP response: ${sent.response}\n${sent.sentNote}`
+        );
+    }
+
+    async forwardEmail(args = {}) {
+        const {
+            uid,
+            to,
+            folder = 'INBOX',
+            note = '',
+            mode = 'attachments',
+            confirm = false,
+            saveToSent = true
+        } = args;
+
+        if (typeof uid !== 'number') return this.textResult('Error: uid is required and must be a number');
+        if (!to || String(to).trim() === '') return this.textResult('Error: "to" is required');
+
+        const from = process.env.YAHOO_EMAIL;
+        if (!from) return this.textResult('Error: YAHOO_EMAIL environment variable is not set');
+
+        const { parsed, raw } = await this.fetchMessage(uid, folder);
+
+        const originalSubject = parsed.subject || '(no subject)';
+        const subject = /^fwd?:/i.test(originalSubject) ? originalSubject : `Fwd: ${originalSubject}`;
+
+        let attachments;
+        let bodyText;
+
+        if (mode === 'eml') {
+            const emlName = this.safeFilename(`${originalSubject}.eml`, `forwarded-uid${uid}.eml`);
+            attachments = [{ filename: emlName, content: raw, contentType: 'message/rfc822' }];
+            bodyText = `${note ? note + '\n\n' : ''}The original message is attached in full as ${emlName}.\n\nFrom: ${parsed.from?.text || 'Unknown'}\nDate: ${parsed.date ? new Date(parsed.date).toString() : 'Unknown'}\nSubject: ${originalSubject}`;
+        } else {
+            attachments = (parsed.attachments || []).map((a, i) => ({
+                filename: this.safeFilename(a.filename, `attachment${i}.bin`),
+                content: a.content,
+                contentType: a.contentType || 'application/octet-stream',
+                cid: a.cid || undefined
+            }));
+            bodyText = `${note ? note + '\n' : ''}${this.quoteOriginalText(parsed, 'forward')}`;
+        }
+
+        const previewAttachments = attachments.map(a => ({
+            filename: a.filename,
+            contentType: a.contentType,
+            size: a.content ? a.content.length : 0
+        }));
+
+        if (confirm !== true) {
+            return this.previewResult('forward_email', {
+                From: from,
+                To: to,
+                Subject: subject,
+                'Original UID': `${uid} in "${folder}"`,
+                'Original from': parsed.from?.text || 'Unknown',
+                Mode: mode,
+                Body: `\n${bodyText.slice(0, 1500)}${bodyText.length > 1500 ? '\n[... preview truncated ...]' : ''}`
+            }, previewAttachments);
+        }
+
+        const message = { from, to, subject, text: bodyText };
+        if (attachments.length > 0) message.attachments = attachments;
+
+        const sent = await this.deliverMessage(message, saveToSent);
+
+        return this.textResult(
+            `Forwarded UID ${uid}.\n\nTo: ${to}\nSubject: ${subject}\nMode: ${mode}\nAttachments carried: ${previewAttachments.length}\nMessage-ID: ${sent.messageId}\nSMTP response: ${sent.response}\n${sent.sentNote}`
+        );
+    }
+
+    async replyToEmail(args = {}) {
+        const {
+            uid,
+            body,
+            folder = 'INBOX',
+            replyAll = false,
+            quoteOriginal = true,
+            confirm = false,
+            saveToSent = true
+        } = args;
+
+        if (typeof uid !== 'number') return this.textResult('Error: uid is required and must be a number');
+        if (!body || String(body).trim() === '') return this.textResult('Error: "body" is required');
+
+        const from = process.env.YAHOO_EMAIL;
+        if (!from) return this.textResult('Error: YAHOO_EMAIL environment variable is not set');
+
+        const { parsed } = await this.fetchMessage(uid, folder);
+
+        const replyTarget = parsed.replyTo && parsed.replyTo.value?.length ? parsed.replyTo : parsed.from;
+        const to = this.addressListToString(replyTarget);
+        if (!to) return this.textResult(`Error: could not determine a reply address for UID ${uid}`);
+
+        let cc = '';
+        if (replyAll) {
+            const others = [];
+            const toList = this.addressListToString(parsed.to, [from]);
+            const ccList = this.addressListToString(parsed.cc, [from]);
+            if (toList) others.push(toList);
+            if (ccList) others.push(ccList);
+            cc = others.join(', ');
+        }
+
+        const originalSubject = parsed.subject || '(no subject)';
+        const subject = /^re:/i.test(originalSubject) ? originalSubject : `Re: ${originalSubject}`;
+        const bodyText = quoteOriginal === false ? body : `${body}\n${this.quoteOriginalText(parsed, 'reply')}`;
+
+        if (confirm !== true) {
+            return this.previewResult('reply_to_email', {
+                From: from,
+                To: to,
+                Cc: cc,
+                Subject: subject,
+                'In reply to': `UID ${uid} in "${folder}" - ${parsed.from?.text || 'Unknown'}`,
+                'Reply all': replyAll ? 'yes' : 'no',
+                Body: `\n${bodyText.slice(0, 1500)}${bodyText.length > 1500 ? '\n[... preview truncated ...]' : ''}`
+            });
+        }
+
+        const references = []
+            .concat(parsed.references || [])
+            .concat(parsed.messageId ? [parsed.messageId] : [])
+            .filter(Boolean);
+
+        const message = {
+            from,
+            to,
+            subject,
+            text: bodyText,
+            inReplyTo: parsed.messageId || undefined,
+            references: references.length > 0 ? references : undefined
+        };
+        if (cc) message.cc = cc;
+
+        const sent = await this.deliverMessage(message, saveToSent);
+
+        // Set \Answered on the original so unansweredOnly searches stay truthful
+        let answeredNote;
+        try {
+            await this.modifyEmails(
+                [uid],
+                (imap, source, callback) => imap.addFlags(source, '\\Answered', callback),
+                'marked answered',
+                folder
+            );
+            answeredNote = `Original UID ${uid} flagged \\Answered`;
+        } catch (err) {
+            answeredNote = `Could not flag the original as answered (${err.message})`;
+        }
+
+        return this.textResult(
+            `Replied to UID ${uid}.\n\nTo: ${to}\n${cc ? `Cc: ${cc}\n` : ''}Subject: ${subject}\nMessage-ID: ${sent.messageId}\nSMTP response: ${sent.response}\n${sent.sentNote}\n${answeredNote}`
+        );
+    }
+
+    // =====================================================================
+    // Multi-folder search and diagnostics
+    // =====================================================================
+
+    /**
+     * Run the same search across several folders and merge the results.
+     * A sweep that checks INBOX plus the filing folders otherwise pays a full
+     * round trip per tool call.
+     */
+    async searchEmailsMulti(query, folders, options = {}) {
+        const merged = [];
+        const perFolder = [];
+
+        for (const folder of folders) {
+            try {
+                const result = await this.searchEmails(query, { ...options, folder });
+                const payload = JSON.parse(result.content[0].text);
+                const emails = (payload.emails || []).map(e => ({ ...e, folder }));
+                merged.push(...emails);
+                perFolder.push({ folder, totalMatches: payload.totalMatches || 0, returned: emails.length });
+            } catch (err) {
+                perFolder.push({ folder, error: err.message });
+            }
+        }
+
+        merged.sort((a, b) => {
+            const da = new Date(a.date).getTime() || 0;
+            const db = new Date(b.date).getTime() || 0;
+            return db - da;
+        });
+
+        const count = options.count || 10;
+        return this.textResult(JSON.stringify({
+            emails: merged.slice(0, count * folders.length),
+            perFolder,
+            foldersSearched: folders,
+            query,
+            filters: options
+        }, null, 2));
+    }
+
+    /**
+     * Verify IMAP and SMTP credentials and report the Sent folder in use
+     */
+    async testConnection() {
+        const report = { imap: null, smtp: null, sentFolder: null, account: process.env.YAHOO_EMAIL || '(not set)' };
+
+        try {
+            const imap = await this.createImapConnection();
+            const boxes = await new Promise((resolve, reject) => {
+                imap.getBoxes((err, b) => {
+                    imap.end();
+                    if (err) reject(err); else resolve(b);
+                });
+            });
+            const folders = this.flattenFolders(boxes).map(f => f.name);
+            report.imap = { ok: true, folderCount: folders.length };
+            const configured = process.env.YAHOO_SENT_FOLDER || null;
+            report.sentFolder = configured ||
+                folders.find(f => ['sent', 'sent items'].includes(f.toLowerCase())) ||
+                '(none found - set YAHOO_SENT_FOLDER)';
+        } catch (err) {
+            report.imap = { ok: false, error: err.message };
+        }
+
+        try {
+            const transport = this.createSmtpTransport();
+            await transport.verify();
+            transport.close();
+            const cfg = this.getSmtpConfig();
+            report.smtp = { ok: true, host: cfg.host, port: cfg.port };
+        } catch (err) {
+            report.smtp = {
+                ok: false,
+                error: err.message,
+                hint: 'Yahoo accepts the IMAP app password on SMTP. If this fails, regenerate the app password at https://login.yahoo.com/account/security and update YAHOO_APP_PASSWORD.'
+            };
+        }
+
+        return this.textResult(JSON.stringify(report, null, 2));
     }
 
     setupErrorHandling() {

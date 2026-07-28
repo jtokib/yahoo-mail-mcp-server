@@ -1,7 +1,7 @@
 {
   "name": "yahoo-mail-mcp",
-  "version": "3.0.0",
-  "description": "Yahoo Mail MCP Server - Full email management via IMAP",
+  "version": "3.1.0",
+  "description": "Yahoo Mail MCP Server - full email management via IMAP, with SMTP send, forward and reply",
   "type": "module",
   "main": "server.js",
   "scripts": {
@@ -29,10 +29,11 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "cors": "^2.8.5",
-    "dotenv": "^17.2.1",
+    "dotenv": "^16.6.1",
     "express": "^4.18.2",
     "imap": "^0.8.17",
-    "mailparser": "^3.7.1"
+    "mailparser": "^3.7.1",
+    "nodemailer": "^8.0.5"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
