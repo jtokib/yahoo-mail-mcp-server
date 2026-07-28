@@ -506,6 +506,47 @@ class YahooMailMCPServer {
                         }
                     },
                     {
+                        name: 'move_by_search',
+                        description: 'Find every message matching a search and move it to a folder in one call - the bulk filing operation the Yahoo web client cannot express. Runs on a single IMAP connection with batched, range-compressed UID sets, so thousands of messages cost a handful of commands rather than one per message. SAFETY: without confirm=true nothing moves and a dry run is returned, reporting how many matched, the date span, and a sample. At least one search criterion is required, so a bare call cannot empty a folder.',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                destinationFolder: {
+                                    type: 'string',
+                                    description: 'Folder to move the messages into. Must already exist - use list_folders to check.'
+                                },
+                                sourceFolder: {
+                                    type: 'string',
+                                    description: 'Folder to move them out of (default: INBOX)',
+                                    default: 'INBOX'
+                                },
+                                sender: { type: 'string', description: 'Match this sender address or name.', default: null },
+                                query: { type: 'string', description: 'Match this term in the subject or the sender.', default: null },
+                                bodyQuery: { type: 'string', description: 'Match this term anywhere in the message text.', default: null },
+                                dateFrom: { type: 'string', description: 'Only messages on or after this date.', default: null },
+                                dateTo: { type: 'string', description: 'Only messages before this date. Pair with nothing else to sweep everything older than a cutoff.', default: null },
+                                unreadOnly: { type: 'boolean', description: 'Only unread messages.', default: false },
+                                unansweredOnly: { type: 'boolean', description: 'Only messages without the \\Answered flag.', default: false },
+                                excludeFlagged: {
+                                    type: 'boolean',
+                                    description: 'Leave flagged (starred) messages where they are (default: true). A star is the clearest signal the message was worth keeping in place.',
+                                    default: true
+                                },
+                                maxMessages: {
+                                    type: 'number',
+                                    description: 'Ceiling for one call (default: 1000). The response reports how many remain; call again to continue. Keeps a single call inside the tool timeout.',
+                                    default: 1000
+                                },
+                                confirm: {
+                                    type: 'boolean',
+                                    description: 'Must be true to actually move. False or absent returns a dry run only.',
+                                    default: false
+                                }
+                            },
+                            required: ['destinationFolder']
+                        }
+                    },
+                    {
                         name: 'test_connection',
                         description: 'Check that IMAP and SMTP both authenticate with the configured Yahoo app password, and report the resolved Sent folder. Run this first when the mail tools misbehave.',
                         inputSchema: {
@@ -590,6 +631,9 @@ class YahooMailMCPServer {
 
                     case 'reply_to_email':
                         return await this.replyToEmail(args);
+
+                    case 'move_by_search':
+                        return await this.moveBySearch(args);
 
                     case 'test_connection':
                         return await this.testConnection();
@@ -2339,6 +2383,206 @@ class YahooMailMCPServer {
             query,
             filters: options
         }, null, 2));
+    }
+
+    /**
+     * Helper: compress a sorted UID list into IMAP set notation.
+     * [1,2,3,7,9,10,11] becomes "1:3,7,9:11". Mail filed in bulk is usually
+     * contiguous, so this turns a command that would run to tens of kilobytes
+     * into one that fits comfortably inside a line.
+     */
+    compressUidSet(uids) {
+        if (!uids.length) return '';
+        const sorted = [...uids].sort((a, b) => a - b);
+        const parts = [];
+        let start = sorted[0];
+        let prev = sorted[0];
+
+        for (let i = 1; i <= sorted.length; i++) {
+            const uid = sorted[i];
+            if (uid === prev + 1) { prev = uid; continue; }
+            parts.push(start === prev ? String(start) : `${start}:${prev}`);
+            start = uid;
+            prev = uid;
+        }
+        return parts.join(',');
+    }
+
+    /**
+     * Find every message matching a search and move it in bulk.
+     *
+     * The existing move_emails walks one UID at a time through modifyEmails,
+     * which is fine for a handful and hopeless for thousands. This runs the
+     * search and the moves on ONE connection - Yahoo allows about three, so
+     * spending them carefully matters - and moves in range-compressed batches.
+     */
+    async moveBySearch(args = {}) {
+        const {
+            destinationFolder,
+            sourceFolder = 'INBOX',
+            sender = null,
+            query = null,
+            bodyQuery = null,
+            dateFrom = null,
+            dateTo = null,
+            unreadOnly = false,
+            unansweredOnly = false,
+            excludeFlagged = true,
+            maxMessages = 1000,
+            confirm = false
+        } = args;
+
+        if (!destinationFolder || !String(destinationFolder).trim()) {
+            return this.textResult('Error: destinationFolder is required');
+        }
+        if (String(destinationFolder).toLowerCase() === String(sourceFolder).toLowerCase()) {
+            return this.textResult(`Error: destinationFolder and sourceFolder are both "${sourceFolder}"`);
+        }
+
+        const criteriaGiven = [sender, query, bodyQuery, dateFrom, dateTo].some(v => v && String(v).trim()) ||
+                              unreadOnly || unansweredOnly;
+        if (!criteriaGiven) {
+            return this.textResult(
+                'Error: give at least one of sender, query, bodyQuery, dateFrom, dateTo, unreadOnly or unansweredOnly. ' +
+                'Refusing to move an entire folder on an empty search.'
+            );
+        }
+
+        const batchSize = 500;
+        const imap = await this.createImapConnection();
+
+        const run = (fn) => new Promise((resolve, reject) => fn(resolve, reject));
+
+        try {
+            // Confirm the destination exists before touching anything. A typo here
+            // would otherwise scatter mail into a folder nobody looks at.
+            const boxes = await run((resolve, reject) =>
+                imap.getBoxes((err, b) => err ? reject(err) : resolve(b)));
+            const names = this.flattenFolders(boxes).map(f => f.name);
+            if (!names.some(n => n.toLowerCase() === String(destinationFolder).toLowerCase())) {
+                imap.end();
+                return this.textResult(
+                    `Error: destination folder "${destinationFolder}" does not exist. Create it first, or pick one of: ${names.slice(0, 25).join(', ')}...`
+                );
+            }
+
+            await run((resolve, reject) =>
+                imap.openBox(sourceFolder, false, (err) =>
+                    err ? reject(new Error(`Failed to open folder "${sourceFolder}": ${err.message}`)) : resolve()));
+
+            const criteria = [];
+            if (query && query.trim()) {
+                criteria.push(['OR', ['HEADER', 'SUBJECT', query], ['HEADER', 'FROM', query]]);
+            }
+            if (sender && sender.trim()) criteria.push(['HEADER', 'FROM', sender]);
+            if (bodyQuery && bodyQuery.trim()) criteria.push(['TEXT', bodyQuery]);
+            if (dateFrom) {
+                const d = new Date(dateFrom);
+                if (isNaN(d.getTime())) { imap.end(); return this.textResult(`Error: invalid dateFrom "${dateFrom}"`); }
+                criteria.push(['SINCE', d]);
+            }
+            if (dateTo) {
+                const d = new Date(dateTo);
+                if (isNaN(d.getTime())) { imap.end(); return this.textResult(`Error: invalid dateTo "${dateTo}"`); }
+                criteria.push(['BEFORE', d]);
+            }
+            if (unreadOnly) criteria.push('UNSEEN');
+            if (unansweredOnly) criteria.push('UNANSWERED');
+
+            const matched = await run((resolve, reject) =>
+                imap.search(criteria, (err, r) => err ? reject(err) : resolve(r || [])));
+
+            let candidates = matched;
+            let flaggedHeld = 0;
+            if (excludeFlagged && matched.length) {
+                const flagged = await run((resolve, reject) =>
+                    imap.search([...criteria, 'FLAGGED'], (err, r) => err ? reject(err) : resolve(r || [])));
+                const starred = new Set(flagged);
+                candidates = matched.filter(uid => !starred.has(uid));
+                flaggedHeld = matched.length - candidates.length;
+            }
+
+            if (candidates.length === 0) {
+                imap.end();
+                return this.textResult(JSON.stringify({
+                    matched: matched.length, flaggedHeldBack: flaggedHeld, toMove: 0,
+                    moved: 0, remaining: 0, sourceFolder, destinationFolder,
+                    note: 'Nothing to move.'
+                }, null, 2));
+            }
+
+            // Oldest first: those are the messages closest to sliding out of the
+            // 10,000-message window, so they are the ones worth filing first.
+            candidates.sort((a, b) => a - b);
+            const selection = candidates.slice(0, Math.max(1, maxMessages));
+            const remaining = candidates.length - selection.length;
+
+            if (confirm !== true) {
+                const sampleUids = selection.slice(0, 5);
+                const sample = await new Promise((resolve) => {
+                    const out = [];
+                    const f = imap.fetch(this.compressUidSet(sampleUids), {
+                        bodies: 'HEADER.FIELDS (FROM SUBJECT DATE)', struct: false
+                    });
+                    f.on('message', (msg) => {
+                        let hdr = '';
+                        msg.on('body', (stream) => stream.on('data', c => hdr += c.toString('ascii')));
+                        msg.once('end', () => {
+                            const p = Imap.parseHeader(hdr);
+                            out.push({ from: p.from?.[0] || '?', subject: p.subject?.[0] || '?', date: p.date?.[0] || '?' });
+                        });
+                    });
+                    f.once('error', () => resolve(out));
+                    f.once('end', () => resolve(out));
+                });
+                imap.end();
+
+                return this.textResult(JSON.stringify({
+                    dryRun: true,
+                    note: 'PREVIEW ONLY - nothing has been moved. Re-run with confirm: true.',
+                    sourceFolder, destinationFolder,
+                    matched: matched.length,
+                    flaggedHeldBack: flaggedHeld,
+                    wouldMoveNow: selection.length,
+                    wouldRemainAfter: remaining,
+                    batches: Math.ceil(selection.length / batchSize),
+                    sample
+                }, null, 2));
+            }
+
+            let moved = 0;
+            const batches = [];
+            for (let i = 0; i < selection.length; i += batchSize) {
+                const chunk = selection.slice(i, i + batchSize);
+                const set = this.compressUidSet(chunk);
+                try {
+                    await run((resolve, reject) =>
+                        imap.move(set, destinationFolder, (err) => err ? reject(err) : resolve()));
+                    moved += chunk.length;
+                    batches.push({ batch: batches.length + 1, count: chunk.length, ok: true });
+                } catch (err) {
+                    batches.push({ batch: batches.length + 1, count: chunk.length, ok: false, error: err.message });
+                    break;
+                }
+            }
+            imap.end();
+
+            return this.textResult(JSON.stringify({
+                sourceFolder, destinationFolder,
+                matched: matched.length,
+                flaggedHeldBack: flaggedHeld,
+                moved,
+                remaining: candidates.length - moved,
+                batches,
+                note: candidates.length - moved > 0
+                    ? `${candidates.length - moved} still match. Call again with the same arguments to continue.`
+                    : 'All matching messages have been filed.'
+            }, null, 2));
+
+        } catch (err) {
+            try { imap.end(); } catch (_) {}
+            return this.textResult(`Error: ${err.message}`);
+        }
     }
 
     /**
