@@ -178,8 +178,13 @@ class YahooMailMCPServer {
                                 },
                                 hasAttachment: {
                                     type: 'boolean',
-                                    description: 'Only return emails carrying an attachment. Applied after the IMAP search over a widened scan window; the response reports how many messages were scanned.',
+                                    description: 'Only return emails carrying an attachment. IMAP has no attachment criterion, so this is applied AFTER the search, over the most recent scanLimit results. The response always reports scanned, totalMatches and complete - check complete before treating the result as exhaustive.',
                                     default: false
+                                },
+                                scanLimit: {
+                                    type: 'number',
+                                    description: 'How many of the most recent matches to inspect when hasAttachment is set (default: 200). Raise it to widen coverage at the cost of speed, or narrow the search with dateFrom/sender/folder instead, which is exact.',
+                                    default: 200
                                 }
                             },
                             required: []
@@ -538,7 +543,8 @@ class YahooMailMCPServer {
                             bodyQuery: args?.bodyQuery || null,
                             flaggedOnly: args?.flaggedOnly || false,
                             unansweredOnly: args?.unansweredOnly || false,
-                            hasAttachment: args?.hasAttachment || false
+                            hasAttachment: args?.hasAttachment || false,
+                            scanLimit: args?.scanLimit || 200
                         };
                         if (Array.isArray(args?.folders) && args.folders.length > 0) {
                             return await this.searchEmailsMulti(args?.query || '', args.folders, searchOptions);
@@ -854,7 +860,8 @@ class YahooMailMCPServer {
             bodyQuery = null,
             flaggedOnly = false,
             unansweredOnly = false,
-            hasAttachment = false
+            hasAttachment = false,
+            scanLimit = 200
         } = options;
 
         // Validate query parameter (allow empty for date-only searches)
@@ -972,6 +979,9 @@ class YahooMailMCPServer {
                                 text: JSON.stringify({
                                     emails: [],
                                     totalMatches: 0,
+                                    scanned: 0,
+                                    returned: 0,
+                                    complete: true,
                                     query: query,
                                     filters: options,
                                     folder: folder
@@ -984,7 +994,8 @@ class YahooMailMCPServer {
                     // Get the most recent results (UIDs are already sorted).
                     // When filtering on attachments the IMAP search cannot help, so widen
                     // the scan window and filter after the fetch.
-                    const scanWindow = hasAttachment ? Math.min(results.length, Math.max(count * 10, 50)) : count;
+                    const effectiveScanLimit = Math.max(Number(scanLimit) || 200, count);
+                    const scanWindow = hasAttachment ? Math.min(results.length, effectiveScanLimit) : count;
                     const limitedResults = results.slice(-scanWindow);
 
                     // Fetch details for these UIDs
@@ -1041,18 +1052,31 @@ class YahooMailMCPServer {
                             output = emails.filter(e => e.hasAttachments).slice(0, count);
                         }
 
+                        // Coverage is reported on every search, not just the partial
+                        // ones, so a caller never has to infer whether the result set
+                        // is exhaustive. complete === false means matches were not
+                        // looked at; narrow the search or raise scanLimit.
+                        const complete = emails.length >= results.length;
+                        const payload = {
+                            emails: output,
+                            totalMatches: results.length,
+                            scanned: emails.length,
+                            returned: output.length,
+                            complete,
+                            query: query,
+                            filters: options,
+                            folder: folder
+                        };
+                        if (!complete && hasAttachment) {
+                            payload.coverageWarning =
+                                `Only the ${emails.length} most recent of ${results.length} matches were inspected for attachments. ` +
+                                `Raise scanLimit, or narrow with dateFrom/sender/folder for an exact answer.`;
+                        }
+
                         resolve({
                             content: [{
                                 type: 'text',
-                                text: JSON.stringify({
-                                    emails: output,
-                                    totalMatches: results.length,
-                                    scanned: emails.length,
-                                    returned: output.length,
-                                    query: query,
-                                    filters: options,
-                                    folder: folder
-                                }, null, 2)
+                                text: JSON.stringify(payload, null, 2)
                             }]
                         });
                     });
@@ -1111,57 +1135,89 @@ class YahooMailMCPServer {
                     return;
                 }
 
-                const successfulUIDs = [];
-                const failedUIDs = [];
-                let processedCount = 0;
-
-                // Process each UID individually to ensure all are processed
-                const processNextUID = () => {
-                    if (processedCount >= uids.length) {
-                        // All UIDs processed
+                // Establish which UIDs actually exist BEFORE operating on them.
+                // A UID STORE against a UID that is not in the mailbox is a silent
+                // no-op under RFC 3501 - the server answers OK and node-imap reports
+                // no error - so without this check a deleted or moved message would
+                // be reported as successfully modified.
+                imap.search([['UID', uids.join(',')]], (searchErr, existingUIDs) => {
+                    if (searchErr) {
                         imap.end();
+                        reject(new Error(`Failed to verify UIDs in "${folder}": ${searchErr.message}`));
+                        return;
+                    }
 
-                        if (failedUIDs.length === uids.length) {
-                            // All failed
-                            reject(new Error(`Failed to ${operationName} ${failedUIDs.length} email(s). UIDs may not exist: ${failedUIDs.join(', ')}`));
-                        } else if (successfulUIDs.length > 0) {
-                            // At least some succeeded
-                            const message = failedUIDs.length > 0
-                                ? `Successfully ${operationName} ${successfulUIDs.length} of ${uids.length} email(s). ` +
-                                  `Successful: ${successfulUIDs.join(', ')}. Failed: ${failedUIDs.join(', ')}`
-                                : `Successfully ${operationName} ${successfulUIDs.length} email(s) with UIDs: ${successfulUIDs.join(', ')}`;
+                    const present = new Set(existingUIDs || []);
+                    const targets = uids.filter(uid => present.has(uid));
+                    const missingUIDs = uids.filter(uid => !present.has(uid));
+
+                    if (targets.length === 0) {
+                        imap.end();
+                        reject(new Error(
+                            `No emails were ${operationName}. None of the requested UIDs exist in "${folder}": ` +
+                            `${missingUIDs.join(', ')}. They may have been deleted, or they may live in another folder ` +
+                            `- UIDs are folder-scoped.`
+                        ));
+                        return;
+                    }
+
+                    const successfulUIDs = [];
+                    const failedUIDs = [];
+                    let processedCount = 0;
+
+                    // Process each UID individually to ensure all are processed
+                    const processNextUID = () => {
+                        if (processedCount >= targets.length) {
+                            imap.end();
+
+                            if (successfulUIDs.length === 0) {
+                                reject(new Error(
+                                    `Failed to ${operationName} any emails. Attempted: ${targets.join(', ')}`
+                                ));
+                                return;
+                            }
+
+                            const parts = [
+                                `Successfully ${operationName} ${successfulUIDs.length} email(s) with UIDs: ${successfulUIDs.join(', ')}`
+                            ];
+                            if (failedUIDs.length > 0) {
+                                parts.push(`Failed: ${failedUIDs.join(', ')}`);
+                            }
+                            if (missingUIDs.length > 0) {
+                                parts.push(
+                                    `Not found in "${folder}" and therefore untouched: ${missingUIDs.join(', ')} ` +
+                                    `(deleted, or in another folder - UIDs are folder-scoped)`
+                                );
+                            }
 
                             resolve({
                                 content: [{
                                     type: 'text',
-                                    text: message
+                                    text: parts.join('. ')
                                 }]
                             });
-                        } else {
-                            reject(new Error(`Failed to ${operationName} any emails`));
-                        }
-                        return;
-                    }
-
-                    const uid = uids[processedCount];
-                    processedCount++;
-
-                    // Execute the UID-based operation for this single UID
-                    operation(imap, uid.toString(), (err) => {
-                        if (err) {
-                            console.error(`[UID ${uid}] Failed to ${operationName}:`, err.message);
-                            failedUIDs.push(uid);
-                        } else {
-                            successfulUIDs.push(uid);
+                            return;
                         }
 
-                        // Continue to next UID (don't stop on errors)
-                        processNextUID();
-                    });
-                };
+                        const uid = targets[processedCount];
+                        processedCount++;
 
-                // Start processing
-                processNextUID();
+                        // Execute the UID-based operation for this single UID
+                        operation(imap, uid.toString(), (opErr) => {
+                            if (opErr) {
+                                console.error(`[UID ${uid}] Failed to ${operationName}:`, opErr.message);
+                                failedUIDs.push(uid);
+                            } else {
+                                successfulUIDs.push(uid);
+                            }
+
+                            // Continue to next UID (don't stop on errors)
+                            processNextUID();
+                        });
+                    };
+
+                    processNextUID();
+                });
             });
         });
     }
@@ -2170,7 +2226,14 @@ class YahooMailMCPServer {
                 const payload = JSON.parse(result.content[0].text);
                 const emails = (payload.emails || []).map(e => ({ ...e, folder }));
                 merged.push(...emails);
-                perFolder.push({ folder, totalMatches: payload.totalMatches || 0, returned: emails.length });
+                perFolder.push({
+                    folder,
+                    totalMatches: payload.totalMatches || 0,
+                    scanned: payload.scanned || 0,
+                    returned: emails.length,
+                    complete: payload.complete !== false,
+                    ...(payload.coverageWarning ? { coverageWarning: payload.coverageWarning } : {})
+                });
             } catch (err) {
                 perFolder.push({ folder, error: err.message });
             }
@@ -2183,10 +2246,18 @@ class YahooMailMCPServer {
         });
 
         const count = options.count || 10;
+        const incomplete = perFolder.filter(f => f.complete === false).map(f => f.folder);
+        const failed = perFolder.filter(f => f.error).map(f => f.folder);
+
         return this.textResult(JSON.stringify({
             emails: merged.slice(0, count * folders.length),
             perFolder,
             foldersSearched: folders,
+            complete: incomplete.length === 0 && failed.length === 0,
+            ...(incomplete.length > 0 ? {
+                coverageWarning: `Partial coverage in: ${incomplete.join(', ')}. Raise scanLimit or narrow the search before treating this as exhaustive.`
+            } : {}),
+            ...(failed.length > 0 ? { failedFolders: failed } : {}),
             query,
             filters: options
         }, null, 2));
