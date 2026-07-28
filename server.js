@@ -2217,27 +2217,34 @@ class YahooMailMCPServer {
      * round trip per tool call.
      */
     async searchEmailsMulti(query, folders, options = {}) {
-        const merged = [];
-        const perFolder = [];
-
-        for (const folder of folders) {
+        // Folders are searched CONCURRENTLY. Each search opens its own IMAP
+        // connection regardless, so running them in sequence bought nothing and
+        // cost everything: four folders at the default scanLimit took longer than
+        // the 60 second tool timeout, which turned a slow answer into no answer.
+        // Wall time is now the slowest single folder rather than the sum.
+        const settled = await Promise.all(folders.map(async (folder) => {
             try {
                 const result = await this.searchEmails(query, { ...options, folder });
                 const payload = JSON.parse(result.content[0].text);
                 const emails = (payload.emails || []).map(e => ({ ...e, folder }));
-                merged.push(...emails);
-                perFolder.push({
-                    folder,
-                    totalMatches: payload.totalMatches || 0,
-                    scanned: payload.scanned || 0,
-                    returned: emails.length,
-                    complete: payload.complete !== false,
-                    ...(payload.coverageWarning ? { coverageWarning: payload.coverageWarning } : {})
-                });
+                return {
+                    emails,
+                    summary: {
+                        folder,
+                        totalMatches: payload.totalMatches || 0,
+                        scanned: payload.scanned || 0,
+                        returned: emails.length,
+                        complete: payload.complete !== false,
+                        ...(payload.coverageWarning ? { coverageWarning: payload.coverageWarning } : {})
+                    }
+                };
             } catch (err) {
-                perFolder.push({ folder, error: err.message });
+                return { emails: [], summary: { folder, error: err.message } };
             }
-        }
+        }));
+
+        const merged = settled.flatMap(r => r.emails);
+        const perFolder = settled.map(r => r.summary);
 
         merged.sort((a, b) => {
             const da = new Date(a.date).getTime() || 0;
