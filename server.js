@@ -507,7 +507,7 @@ class YahooMailMCPServer {
                     },
                     {
                         name: 'move_by_search',
-                        description: 'Find every message matching a search and move it to a folder in one call - the bulk filing operation the Yahoo web client cannot express. Runs on a single IMAP connection with batched, range-compressed UID sets, so thousands of messages cost a handful of commands rather than one per message. SAFETY: without confirm=true nothing moves and a dry run is returned, reporting how many matched, the date span, and a sample. At least one search criterion is required, so a bare call cannot empty a folder.',
+                        description: 'Find every message matching a search and move it to a folder in one call - the bulk filing operation the Yahoo web client cannot express. Runs on a single IMAP connection with batched, range-compressed UID sets, so thousands of messages cost a handful of commands rather than one per message. SAFETY: without confirm=true nothing moves and a dry run is returned, reporting how many matched, the date span, and a sample. At least one search criterion is required, so a bare call cannot empty a folder. Moving out of a capped mailbox uncovers older messages as it frees room at the cap, so repeat the call until it reports nothing to move.',
                         inputSchema: {
                             type: 'object',
                             properties: {
@@ -2599,7 +2599,7 @@ class YahooMailMCPServer {
                 batches,
                 note: candidates.length - moved > 0
                     ? `${candidates.length - moved} still match. Call again with the same arguments to continue.`
-                    : 'All matching messages have been filed.'
+                    : 'Everything that was VISIBLE has been filed. If the source is a capped mailbox - Yahoo exposes only the most recent 10,000 messages per folder - then filing frees room at the cap and older messages slide into view, some of which may also match. Run again until this reports "Nothing to move".'
             }, null, 2));
 
         } catch (err) {
