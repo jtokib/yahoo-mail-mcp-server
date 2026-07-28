@@ -613,7 +613,63 @@ class YahooMailMCPServer {
     /**
      * Create IMAP connection using app-specific password (like the working test script)
      */
-    async createImapConnection() {
+    /**
+     * Open an IMAP connection, retrying when Yahoo rate-limits the login.
+     *
+     * Yahoo permits roughly three concurrent IMAP connections and answers further
+     * logins with "NO [LIMIT] ... Rate limit hit" before dropping the socket. That
+     * is a transient condition, not a failure, so it is worth a short backoff
+     * rather than surfacing as an error to the caller.
+     */
+    async createImapConnection(attempt = 0) {
+        const maxAttempts = Number(process.env.YAHOO_IMAP_RETRIES || 3);
+        try {
+            return await this.openImapConnection();
+        } catch (err) {
+            if (this.isRateLimitError(err) && attempt < maxAttempts - 1) {
+                const waitMs = 1500 * Math.pow(2, attempt);
+                console.error(`[IMAP] Rate limited, retrying in ${waitMs}ms (attempt ${attempt + 1}/${maxAttempts})`);
+                await new Promise(r => setTimeout(r, waitMs));
+                return this.createImapConnection(attempt + 1);
+            }
+            throw err;
+        }
+    }
+
+    /**
+     * Helper: is this Yahoo telling us to slow down rather than go away?
+     */
+    isRateLimitError(err) {
+        const message = String((err && err.message) || err || '').toLowerCase();
+        return message.includes('rate limit') ||
+               message.includes('[limit]') ||
+               message.includes('too many connections');
+    }
+
+    /**
+     * Helper: run tasks with a bounded number in flight.
+     *
+     * Unbounded concurrency across folders is what provokes the rate limiter -
+     * eighteen folders opened at once had eleven rejected. Results keep the input
+     * order regardless of completion order.
+     */
+    async runBounded(items, worker, limit) {
+        const results = new Array(items.length);
+        let cursor = 0;
+
+        const runner = async () => {
+            while (cursor < items.length) {
+                const index = cursor++;
+                results[index] = await worker(items[index], index);
+            }
+        };
+
+        const width = Math.max(1, Math.min(limit, items.length));
+        await Promise.all(Array.from({ length: width }, runner));
+        return results;
+    }
+
+    async openImapConnection() {
         return new Promise((resolve, reject) => {
             if (!process.env.YAHOO_EMAIL || !process.env.YAHOO_APP_PASSWORD) {
                 const error = new Error('YAHOO_EMAIL or YAHOO_APP_PASSWORD environment variables are not set');
@@ -625,14 +681,14 @@ class YahooMailMCPServer {
             const imap = new Imap({
                 user: process.env.YAHOO_EMAIL,
                 password: process.env.YAHOO_APP_PASSWORD,
-                host: 'imap.mail.yahoo.com',
-                port: 993,
+                host: process.env.YAHOO_IMAP_HOST || 'imap.mail.yahoo.com',
+                port: Number(process.env.YAHOO_IMAP_PORT || 993),
                 tls: true,
                 authTimeout: 30000,
                 connTimeout: 30000,
                 tlsOptions: {
                     rejectUnauthorized: true,
-                    servername: 'imap.mail.yahoo.com',
+                    servername: process.env.YAHOO_IMAP_HOST || 'imap.mail.yahoo.com',
                     minVersion: 'TLSv1.2'
                 }
             });
@@ -2217,12 +2273,13 @@ class YahooMailMCPServer {
      * round trip per tool call.
      */
     async searchEmailsMulti(query, folders, options = {}) {
-        // Folders are searched CONCURRENTLY. Each search opens its own IMAP
-        // connection regardless, so running them in sequence bought nothing and
-        // cost everything: four folders at the default scanLimit took longer than
-        // the 60 second tool timeout, which turned a slow answer into no answer.
-        // Wall time is now the slowest single folder rather than the sum.
-        const settled = await Promise.all(folders.map(async (folder) => {
+        // Folders are searched concurrently but with a BOUNDED width. Sequential
+        // searching blew the 60 second tool timeout; unbounded searching blew
+        // Yahoo's connection limit, which permits roughly three at once and answers
+        // the rest with "Rate limit hit" - eighteen folders at once had eleven
+        // rejected. A small pool satisfies both constraints.
+        const concurrency = Number(process.env.YAHOO_IMAP_CONCURRENCY || 3);
+        const settled = await this.runBounded(folders, async (folder) => {
             try {
                 const result = await this.searchEmails(query, { ...options, folder });
                 const payload = JSON.parse(result.content[0].text);
@@ -2239,9 +2296,18 @@ class YahooMailMCPServer {
                     }
                 };
             } catch (err) {
-                return { emails: [], summary: { folder, error: err.message } };
+                return {
+                    emails: [],
+                    summary: {
+                        folder,
+                        error: err.message,
+                        ...(this.isRateLimitError(err)
+                            ? { hint: 'Yahoo rate-limited this connection. Search fewer folders per call, or lower YAHOO_IMAP_CONCURRENCY.' }
+                            : {})
+                    }
+                };
             }
-        }));
+        }, concurrency);
 
         const merged = settled.flatMap(r => r.emails);
         const perFolder = settled.map(r => r.summary);
@@ -2255,6 +2321,7 @@ class YahooMailMCPServer {
         const count = options.count || 10;
         const incomplete = perFolder.filter(f => f.complete === false).map(f => f.folder);
         const failed = perFolder.filter(f => f.error).map(f => f.folder);
+        const rateLimited = perFolder.filter(f => f.hint).map(f => f.folder);
 
         return this.textResult(JSON.stringify({
             emails: merged.slice(0, count * folders.length),
@@ -2265,6 +2332,10 @@ class YahooMailMCPServer {
                 coverageWarning: `Partial coverage in: ${incomplete.join(', ')}. Raise scanLimit or narrow the search before treating this as exhaustive.`
             } : {}),
             ...(failed.length > 0 ? { failedFolders: failed } : {}),
+            ...(rateLimited.length > 0 ? {
+                rateLimitWarning: `Yahoo rate-limited ${rateLimited.length} folder(s): ${rateLimited.join(', ')}. ` +
+                    `Yahoo allows about three concurrent IMAP connections. Search in batches of four folders or fewer.`
+            } : {}),
             query,
             filters: options
         }, null, 2));
@@ -2285,7 +2356,13 @@ class YahooMailMCPServer {
                 });
             });
             const folders = this.flattenFolders(boxes).map(f => f.name);
-            report.imap = { ok: true, folderCount: folders.length };
+            report.imap = {
+                ok: true,
+                host: process.env.YAHOO_IMAP_HOST || 'imap.mail.yahoo.com',
+                folderCount: folders.length,
+                concurrency: Number(process.env.YAHOO_IMAP_CONCURRENCY || 3),
+                note: 'imap.mail.yahoo.com exposes only the most recent 10,000 messages per folder. Mail older than that is invisible to IMAP even though the web client still shows it.'
+            };
             const configured = process.env.YAHOO_SENT_FOLDER || null;
             report.sentFolder = configured ||
                 folders.find(f => ['sent', 'sent items'].includes(f.toLowerCase())) ||
