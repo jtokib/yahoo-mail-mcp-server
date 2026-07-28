@@ -1826,16 +1826,34 @@ class YahooMailMCPServer {
         for (const uid of uids) {
             try {
                 const { parsed, attrs } = await this.fetchMessage(uid, folder);
-                const attachments = (parsed.attachments || []).map((a, index) => ({
-                    index,
-                    filename: a.filename || '(unnamed)',
-                    contentType: a.contentType || 'application/octet-stream',
-                    size: a.size || (a.content ? a.content.length : 0),
-                    sizeHuman: this.formatBytes(a.size || (a.content ? a.content.length : 0)),
-                    inline: a.contentDisposition === 'inline',
-                    contentId: a.cid || null,
-                    looksLikeDocument: /^(application\/pdf|image\/|application\/vnd\.|application\/msword|text\/csv)/i.test(a.contentType || '')
-                }));
+                const attachments = (parsed.attachments || []).map((a, index) => {
+                    const contentType = (a.contentType || 'application/octet-stream').toLowerCase();
+                    const size = a.size || (a.content ? a.content.length : 0);
+                    const inline = a.contentDisposition === 'inline';
+                    const isImage = contentType.startsWith('image/');
+
+                    // A signature logo is a small image the message references by
+                    // Content-ID. Scanned receipts and photographed invoices are
+                    // larger and are not referenced from the body, so this keeps the
+                    // is-this-a-receipt hint from firing on every corporate footer.
+                    const isSignatureLogo = isImage && Boolean(a.cid) && size < 100 * 1024;
+
+                    const looksLikeDocument =
+                        /^(application\/pdf|application\/vnd\.|application\/msword|application\/rtf|application\/zip|text\/csv)/.test(contentType) ||
+                        (isImage && !inline && !isSignatureLogo);
+
+                    return {
+                        index,
+                        filename: a.filename || '(unnamed)',
+                        contentType: a.contentType || 'application/octet-stream',
+                        size,
+                        sizeHuman: this.formatBytes(size),
+                        inline,
+                        contentId: a.cid || null,
+                        isSignatureLogo,
+                        looksLikeDocument
+                    };
+                });
 
                 results.push({
                     uid,
