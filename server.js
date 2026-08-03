@@ -123,7 +123,7 @@ class YahooMailMCPServer {
                                 },
                                 dateTo: {
                                     type: 'string',
-                                    description: 'Filter emails up to, but NOT including, this date (IMAP BEFORE semantics). Pass the day after the last one you want. ISO 8601 or RFC 2822 format.',
+                                    description: 'Filter emails up to and including this date. A dateFrom/dateTo pair covering the same day returns mail from that day. ISO 8601 or RFC 2822 format.',
                                     default: null
                                 },
                                 sender: {
@@ -706,7 +706,14 @@ class YahooMailMCPServer {
                     try {
                         const toDate = new Date(dateTo);
                         if (!isNaN(toDate.getTime())) {
-                            criteria.push(['BEFORE', toDate]);
+                            // IMAP BEFORE is strictly earlier than the date given,
+                            // so passing dateTo straight through drops everything
+                            // sent on dateTo itself and makes a same-day range
+                            // return nothing. Advance one day so that a
+                            // dateFrom/dateTo pair reads as inclusive on both ends.
+                            const beforeDate = new Date(toDate);
+                            beforeDate.setDate(beforeDate.getDate() + 1);
+                            criteria.push(['BEFORE', beforeDate]);
                         }
                     } catch (e) {
                         imap.end();
@@ -1026,10 +1033,14 @@ class YahooMailMCPServer {
 
                     // Check for missing UIDs
                     const missingUIDs = uids.filter(uid => !foundUIDs.has(uid));
-                    if (missingUIDs.length > 0) {
+
+                    // Only fail outright when there is nothing to show. One
+                    // deleted or moved message previously poisoned the whole
+                    // call and discarded every email that did come back.
+                    if (missingUIDs.length > 0 && emails.length === 0) {
                         reject(new Error(
                             `UIDs not found: ${missingUIDs.join(', ')}. ` +
-                            `Found ${emails.length} of ${uids.length} requested emails. ` +
+                            `Found 0 of ${uids.length} requested emails. ` +
                             `Missing UIDs may have been deleted or moved to another folder.`
                         ));
                         return;
@@ -1052,10 +1063,17 @@ class YahooMailMCPServer {
                         `${email.content}`
                     ).join('\n\n' + '='.repeat(80) + '\n\n');
 
+                    const notFound = missingUIDs.length > 0
+                        ? `NOT FOUND: ${missingUIDs.join(', ')} `
+                          + `(returned ${emails.length} of ${uids.length} requested). `
+                          + `These UIDs may have been deleted or moved to another folder.\n\n`
+                          + '='.repeat(80) + '\n\n'
+                        : '';
+
                     resolve({
                         content: [{
                             type: 'text',
-                            text: emailContent
+                            text: notFound + emailContent
                         }]
                     });
                 });
