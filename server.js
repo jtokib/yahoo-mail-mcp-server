@@ -919,8 +919,8 @@ class YahooMailMCPServer {
 
         const imap = await this.createImapConnection();
 
-        return new Promise((resolve, reject) => {
-            imap.openBox(folder, true, (err, box) => {  // true = read-only mode
+        const fetchedMessages = await new Promise((resolve, reject) => {
+            imap.openBox(folder, true, (err) => {
                 if (err) {
                     imap.end();
                     reject(new Error(`Failed to open folder "${folder}": ${err.message}`));
@@ -935,44 +935,25 @@ class YahooMailMCPServer {
                     struct: true
                 });
 
-                const emails = [];
-                const foundUIDs = new Set();
+                const messages = [];
 
                 fetch.on('message', (msg, seqno) => {
-                    let buffer = '';
+                    const chunks = [];
                     let attrs = null;
 
-                    msg.on('body', (stream, info) => {
+                    msg.on('body', (stream) => {
                         stream.on('data', (chunk) => {
-                            buffer += chunk.toString('ascii');
+                            chunks.push(chunk);
                         });
                     });
 
                     msg.once('attributes', (attributes) => {
                         attrs = attributes;
-                        foundUIDs.add(attributes.uid);
                     });
 
                     msg.once('end', () => {
-                        simpleParser(buffer, (err, parsed) => {
-                            if (err) {
-                                console.error('Error parsing email:', err);
-                                return;
-                            }
-
-                            emails.push({
-                                uid: attrs.uid,
-                                sequenceNumber: seqno,  // Still include for reference
-                                from: parsed.from?.text || 'Unknown',
-                                to: parsed.to?.text || 'Unknown',
-                                subject: parsed.subject || 'No Subject',
-                                date: parsed.date || 'Unknown Date',
-                                size: attrs.size || 0,
-                                flags: attrs.flags || [],
-                                hasAttachments: this.hasAttachments(attrs.struct),
-                                content: parsed.text || parsed.html || 'No content available'
-                            });
-                        });
+                        const raw = Buffer.concat(chunks);
+                        messages.push({ attrs, seqno, raw });
                     });
                 });
 
@@ -983,44 +964,44 @@ class YahooMailMCPServer {
 
                 fetch.once('end', () => {
                     imap.end();
-
-                    // Check for missing UIDs
-                    const missingUIDs = uids.filter(uid => !foundUIDs.has(uid));
-                    if (missingUIDs.length > 0) {
-                        reject(new Error(
-                            `UIDs not found: ${missingUIDs.join(', ')}. ` +
-                            `Found ${emails.length} of ${uids.length} requested emails. ` +
-                            `Missing UIDs may have been deleted or moved to another folder.`
-                        ));
-                        return;
-                    }
-
-                    // Sort by UID for consistent output
-                    emails.sort((a, b) => a.uid - b.uid);
-
-                    // Format output
-                    const emailContent = emails.map(email =>
-                        `📧 Email UID: ${email.uid} (Seq #${email.sequenceNumber})\n\n` +
-                        `From: ${email.from}\n` +
-                        `To: ${email.to}\n` +
-                        `Subject: ${email.subject}\n` +
-                        `Date: ${email.date}\n` +
-                        `Size: ${email.size} bytes\n` +
-                        `Flags: ${email.flags.join(', ') || 'None'}\n` +
-                        `Has Attachments: ${email.hasAttachments ? 'Yes' : 'No'}\n\n` +
-                        `--- Content ---\n` +
-                        `${email.content}`
-                    ).join('\n\n' + '='.repeat(80) + '\n\n');
-
-                    resolve({
-                        content: [{
-                            type: 'text',
-                            text: emailContent
-                        }]
-                    });
+                    resolve(messages);
                 });
             });
         });
+
+        const receivedUIDs = fetchedMessages.map(({ attrs }) => attrs.uid);
+        const foundUIDs = new Set(receivedUIDs);
+        const missingUIDs = uids.filter(uid => !foundUIDs.has(uid));
+        if (missingUIDs.length > 0) {
+            throw new Error(
+                `UIDs not found: ${missingUIDs.join(', ')}. ` +
+                `Found ${foundUIDs.size} of ${uids.length} requested emails. ` +
+                `Missing UIDs may have been deleted or moved to another folder.`
+            );
+        }
+
+        fetchedMessages.sort((a, b) => a.attrs.uid - b.attrs.uid);
+        const parsing = fetchedMessages.map(async ({ attrs, seqno, raw }) => {
+            const parse = simpleParser(raw);
+            const parsed = await parse.catch(error => {
+                throw new Error(`Failed to parse email UID ${attrs.uid}: ${error.message}`, { cause: error });
+            });
+            const hasAttachments = this.hasAttachments(attrs.struct);
+            return `📧 Email UID: ${attrs.uid} (Seq #${seqno})\n\n` +
+                `From: ${parsed.from?.text || 'Unknown'}\n` +
+                `To: ${parsed.to?.text || 'Unknown'}\n` +
+                `Subject: ${parsed.subject || 'No Subject'}\n` +
+                `Date: ${parsed.date || 'Unknown Date'}\n` +
+                `Size: ${attrs.size || 0} bytes\n` +
+                `Flags: ${attrs.flags?.join(', ') || 'None'}\n` +
+                `Has Attachments: ${hasAttachments ? 'Yes' : 'No'}\n\n` +
+                `--- Content ---\n` +
+                `${parsed.text || parsed.html || 'No content available'}`;
+        });
+        const formattedEmails = await Promise.all(parsing);
+        const separator = '\n\n' + '='.repeat(80) + '\n\n';
+        const text = formattedEmails.join(separator);
+        return { content: [{ type: 'text', text }] };
     }
 
     /**
