@@ -2,7 +2,7 @@
 
 /**
  * Yahoo Mail MCP Server with OAuth2 - A beginner-friendly introduction to MCP
- * This server provides read-only access to Yahoo Mail via OAuth2 and IMAP
+ * This server manages Yahoo Mail via IMAP and SMTP.
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -11,12 +11,82 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import Imap from 'imap';
 import { simpleParser } from 'mailparser';
+import nodemailer from 'nodemailer';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 
 // Load environment variables from .env file (for local development)
 dotenv.config();
+
+const recipientSchema = {
+    type: 'array',
+    items: { type: 'string', format: 'email' }
+};
+
+const emailProperties = {
+    to: { ...recipientSchema, description: 'To recipient email addresses' },
+    cc: { ...recipientSchema, description: 'Cc recipient email addresses' },
+    bcc: { ...recipientSchema, description: 'Bcc recipient email addresses' },
+    subject: { type: 'string', description: 'Email subject' },
+    body: { type: 'string', description: 'Plain-text email body' }
+};
+
+const composeTools = [
+    {
+        name: 'send_email',
+        description: 'Send an email immediately from the configured Yahoo Mail account. Use only when the user explicitly asks to send the email.',
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+        inputSchema: {
+            type: 'object',
+            properties: { ...emailProperties, to: { ...emailProperties.to, minItems: 1 } },
+            required: ['to', 'subject', 'body'],
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'create_draft',
+        description: 'Save an editable email in the Yahoo Mail Draft folder without sending it. Recipients, subject, and body may be left blank.',
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+        inputSchema: {
+            type: 'object',
+            properties: emailProperties,
+            additionalProperties: false
+        }
+    }
+];
+
+const emailAddressPattern = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const addressDelimiters = /[<>,;:"()[\]\\\x00-\x1f\x7f]/;
+
+function composeMessage({ to = [], cc = [], bcc = [], subject = '', body = '' }, from) {
+    for (const [field, addresses] of [['to', to], ['cc', cc], ['bcc', bcc]]) {
+        const valid = Array.isArray(addresses) && addresses.every(address => {
+            if (typeof address !== 'string') return false;
+
+            const matchesEmail = emailAddressPattern.test(address);
+            const containsDelimiters = addressDelimiters.test(address);
+            return matchesEmail && !containsDelimiters;
+        });
+        if (!valid) {
+            throw new Error(`${field} must be an array of email addresses without display names`);
+        }
+    }
+
+    if (typeof subject !== 'string' || /[\r\n\x00]/.test(subject)) {
+        throw new Error('subject must be a single line of text');
+    }
+    if (typeof body !== 'string') {
+        throw new Error('body must be a string');
+    }
+
+    return { from, to, cc, bcc, subject, text: body };
+}
+
+function emailToolResult(result) {
+    const text = JSON.stringify(result, null, 2);
+    return { content: [{ type: 'text', text }] };
+}
 
 class YahooMailMCPServer {
     constructor() {
@@ -51,6 +121,9 @@ class YahooMailMCPServer {
      * Setup MCP tool handlers
      */
     setupToolHandlers() {
+        // The HTTP server can run without authentication. Expose composition only over local stdio.
+        const composeEnabled = process.env.TRANSPORT_MODE !== 'sse';
+
         // Handle tool listing
         this.server.setRequestHandler(ListToolsRequestSchema, async () => {
             return {
@@ -303,7 +376,8 @@ class YahooMailMCPServer {
                             type: 'object',
                             properties: {}
                         }
-                    }
+                    },
+                    ...(composeEnabled ? composeTools : [])
                 ]
             };
         });
@@ -311,8 +385,13 @@ class YahooMailMCPServer {
         // Handle tool execution
         this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const { name, arguments: args } = request.params;
+            const isComposeTool = composeTools.some(tool => tool.name === name);
 
             try {
+                if (isComposeTool && !composeEnabled) {
+                    throw new Error(`${name} is available only over stdio`);
+                }
+
                 switch (name) {
                     case 'list_emails':
                         return await this.listEmails(args?.count || 10, args?.folder || 'INBOX', args?.offset || 0);
@@ -354,11 +433,17 @@ class YahooMailMCPServer {
                     case 'list_folders':
                         return await this.listFolders();
 
+                    case 'send_email':
+                        return await this.sendEmail(args);
+
+                    case 'create_draft':
+                        return await this.createDraft(args);
+
                     default:
                         throw new Error(`Unknown tool: ${name}`);
                 }
             } catch (error) {
-                return {
+                const result = {
                     content: [
                         {
                             type: 'text',
@@ -366,8 +451,66 @@ class YahooMailMCPServer {
                         }
                     ]
                 };
+                if (isComposeTool) {
+                    result.isError = true;
+                }
+                return result;
             }
         });
+    }
+
+    async sendEmail(args = {}) {
+        const { YAHOO_EMAIL: user, YAHOO_APP_PASSWORD: pass } = process.env;
+        if (!user || !pass) {
+            throw new Error('YAHOO_EMAIL or YAHOO_APP_PASSWORD environment variables are not set');
+        }
+
+        const message = composeMessage(args, user);
+        if (message.to.length === 0 || args.subject === undefined || args.body === undefined) {
+            throw new Error('Sending requires at least one to recipient, a subject, and a body');
+        }
+
+        const smtp = nodemailer.createTransport({
+            host: 'smtp.mail.yahoo.com',
+            port: 465,
+            secure: true,
+            auth: { user, pass },
+            connectionTimeout: 10000,
+            greetingTimeout: 10000,
+            socketTimeout: 20000
+        });
+        const { messageId, accepted, rejected } = await smtp.sendMail(message);
+        const status = rejected.length > 0 ? 'partially_sent' : 'sent';
+
+        return emailToolResult({ status, messageId, accepted, rejected });
+    }
+
+    async createDraft(args = {}) {
+        const message = composeMessage(args, process.env.YAHOO_EMAIL);
+        const composer = nodemailer.createTransport({ streamTransport: true, buffer: true, newline: 'windows' });
+        const { message: mime, messageId } = await composer.sendMail(message);
+        const folder = 'Draft';
+        const imap = await this.createImapConnection();
+
+        try {
+            const uid = await new Promise((resolve, reject) => {
+                const onClose = () => {
+                    reject(new Error('The IMAP connection closed before Yahoo confirmed whether the draft was saved'));
+                };
+                imap.once('close', onClose);
+                imap.append(mime, { mailbox: folder, flags: ['\\Draft'] }, (error, appendedUid) => {
+                    imap.removeListener('close', onClose);
+                    if (error) {
+                        reject(error);
+                        return;
+                    }
+                    resolve(appendedUid);
+                });
+            });
+            return emailToolResult({ status: 'draft_created', folder, uid, messageId });
+        } finally {
+            imap.end();
+        }
     }
 
     /**
