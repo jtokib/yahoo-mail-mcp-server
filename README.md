@@ -1,13 +1,13 @@
 # Yahoo Mail MCP Server
 
-A Model Context Protocol (MCP) server that provides full email management for Yahoo Mail via IMAP. This server supports both local stdio transport (for Claude Desktop) and HTTP/SSE transport (for remote access via Claude.ai).
+A Model Context Protocol (MCP) server that manages Yahoo Mail via IMAP and sends email via Yahoo SMTP. It supports local stdio clients such as Codex and Claude Desktop and remote clients over HTTP/SSE.
 
 ## Features
 
 - **Secure OAuth 2.0 Authentication**: Protect your remote MCP server with OAuth 2.0 authorization code flow with PKCE
 - **UID-Based Operations**: Uses permanent IMAP UIDs that don't change when emails are deleted (v3.0.0+)
 - **Full Email Management**: Complete email operations with batch processing support
-- **Eleven Powerful Tools**:
+- **Mailbox Tools**:
   - `list_emails`: List recent emails with enriched metadata (size, flags, attachments) and pagination
   - `read_email`: Read the full content of emails (batch support)
   - `search_emails`: Advanced search with filters (date ranges, sender, unread status)
@@ -19,11 +19,15 @@ A Model Context Protocol (MCP) server that provides full email management for Ya
   - `flag_emails`: Flag emails as important/starred
   - `unflag_emails`: Remove flag from emails
   - `move_emails`: Move emails to any folder
+- **Compose Tools (local stdio)**:
+  - `create_draft`: Save a plain-text message in Yahoo Mail's `Draft` folder for editing. All fields are optional.
+  - `send_email`: Send a plain-text message immediately. Requires `to` (a nonempty array of email addresses), `subject`, and `body`.
+  - Both tools accept `cc` and `bcc` arrays and use the same Yahoo address and app password as the mailbox tools.
 - **Enriched Metadata**: All emails include UID, size, flags, hasAttachments, and folder information
 - **Advanced Search**: Filter by date range, sender, unread status, and search across any folder
 - **Batch Operations**: All management operations support processing multiple emails at once with accurate success/failure tracking
 - **Dual Transport Modes**:
-  - `stdio`: For local Claude Desktop integration
+  - `stdio`: For local Codex and Claude Desktop integration
   - `sse`: For remote access via HTTP/Server-Sent Events (required for Render.com)
 - **Cross-Platform**: Works on both Windows and Linux development environments
 - **Docker Support**: Containerized deployment with Docker and Docker Compose
